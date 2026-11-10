@@ -225,19 +225,35 @@ export function App() {
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
-    localStorage.setItem(STORAGE_KEYS.THEME, theme);
+    try {
+      localStorage.setItem(STORAGE_KEYS.THEME, theme);
+    } catch {
+      // Ignore in sandboxed iframe
+    }
   }, [theme]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
+    try {
+      localStorage.setItem(STORAGE_KEYS.COURSES, JSON.stringify(courses));
+    } catch {
+      // Ignore in sandboxed iframe
+    }
   }, [courses]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.MASTERY, JSON.stringify(masteryMap));
+    try {
+      localStorage.setItem(STORAGE_KEYS.MASTERY, JSON.stringify(masteryMap));
+    } catch {
+      // Ignore in sandboxed iframe
+    }
   }, [masteryMap]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(mistakes));
+    try {
+      localStorage.setItem(STORAGE_KEYS.MISTAKES, JSON.stringify(mistakes));
+    } catch {
+      // Ignore in sandboxed iframe
+    }
   }, [mistakes]);
 
   const fetchAIStatus = async () => {
