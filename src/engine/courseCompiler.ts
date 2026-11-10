@@ -72,6 +72,34 @@ export const JSON_KEY_BLACKLIST = new Set([
 ]);
 
 /**
+ * Detects if a course pack is corrupted with raw schema keys (e.g. cards named "id", "code", "title").
+ */
+export function isCorruptedCoursePack(course: CoursePack | null | undefined): boolean {
+  if (!course || !Array.isArray(course.nodes) || course.nodes.length === 0) return false;
+  const cleanWord = (s: string) => (s || '').replace(/["'{}[\]:,]/g, '').trim().toLowerCase();
+  const isSchemaKey = (s: string) => {
+    const clean = cleanWord(s);
+    if (!clean) return false;
+    return (
+      JSON_KEY_BLACKLIST.has(clean) ||
+      /^(id|code|title|subtitle|statement|primingsummary|motivatedhook|keyformulaorrule|examweight|units|nodes|institutiontag|examtitle|description|lastupdated|unconditionaltruthsummary|commonmisconceptions|confusablewith|prerequisites|quizletstages)$/i.test(
+        clean
+      )
+    );
+  };
+
+  // Check if any of the first 5 nodes is a raw schema key
+  const first5 = course.nodes.slice(0, 5);
+  if (first5.some((n) => isSchemaKey(n.title))) return true;
+
+  // Check if at least 2 schema keys exist anywhere in the deck
+  const schemaCount = course.nodes.filter((n) => isSchemaKey(n.title)).length;
+  if (schemaCount >= 2) return true;
+
+  return false;
+}
+
+/**
  * Hydrates a distilled or partial CoursePack into a complete, rich CoursePack
  * with all 4 Quizlet Learn stages, diagnostic MCQ distractors, near-twin discrimination,
  * active recall with 6-rung hint ladders (R0-R5), and Feynman application rubrics.
