@@ -57,6 +57,16 @@ function extractKeywords(text: string, title: string): string[] {
   return [title.toLowerCase().split(/\s+/)[0] || 'mechanism'];
 }
 
+export const JSON_KEY_BLACKLIST = new Set([
+  'id', 'code', 'title', 'institutiontag', 'examtitle', 'description', 'lastupdated',
+  'units', 'nodes', 'unitid', 'statement', 'isunconditionaltruth', 'examweight',
+  'motivatedhook', 'keyformulaorrule', 'commonmisconceptions', 'confusablewith',
+  'predictionprompt', 'teachingstep', 'quizletstages', 'recognition', 'discrimination',
+  'cuedrecall', 'application', 'requiredmoves', 'modelsolution', 'commontraps', 'hints',
+  'acceptedkeywords', 'canonicalanswer', 'options', 'correctindex', 'subtitle',
+  'primingsummary', 'unconditionaltruthsummary'
+]);
+
 /**
  * Hydrates a distilled or partial CoursePack into a complete, rich CoursePack
  * with all 4 Quizlet Learn stages, diagnostic MCQ distractors, near-twin discrimination,
@@ -123,15 +133,30 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
   });
 
   // 2. Normalize Nodes
-  const rawNodes = Array.isArray(input.nodes) && input.nodes.length > 0 ? input.nodes : [];
+  const rawNodes = (Array.isArray(input.nodes) && input.nodes.length > 0)
+    ? input.nodes
+    : (Array.isArray((input as any).cards) && (input as any).cards.length > 0)
+      ? (input as any).cards
+      : (Array.isArray((input as any).concepts) && (input as any).concepts.length > 0)
+        ? (input as any).concepts
+        : (Array.isArray((input as any).flashcards) && (input as any).flashcards.length > 0)
+          ? (input as any).flashcards
+          : (Array.isArray((input as any).items) && (input as any).items.length > 0)
+            ? (input as any).items
+            : [];
   const validNodesInput: DistilledConceptInput[] = [];
 
   for (const n of rawNodes) {
-    const rawTitle = (n.title || '').trim().replace(/^[*_#`\s]+|[*_#`:\s]+$/g, '');
-    const rawStatement = (n.statement || '').trim().replace(/^[*_`\s]+|[*_`:\s]+$/g, '');
+    const rawTitle = (n.title || (n as any).concept || (n as any).name || (n as any).term || '')
+      .trim()
+      .replace(/^[*_#`\s{}[\],"]+|[*_#`:\s{}[\],"]+$/g, '');
+    const rawStatement = (n.statement || (n as any).definition || (n as any).rule || (n as any).description || (n as any).summary || '')
+      .trim()
+      .replace(/^[*_#`\s{}[\],"]+|[*_#`:\s{}[\],"]+$/g, '');
 
-    // Skip blank or invalid metadata lines
+    // Skip blank or invalid metadata lines or blacklisted JSON keys
     if (!rawTitle || rawTitle.length < 2) continue;
+    if (JSON_KEY_BLACKLIST.has(rawTitle.toLowerCase())) continue;
     if (/^(id|code|title|institutionTag|lastUpdated|units|nodes)$/i.test(rawTitle)) continue;
 
     // Target unit
@@ -367,6 +392,177 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
  * - Caps propositions per unit to 3–6 high-yield nodes (never 156 fragmented lines!).
  * - Adheres strictly to the 80/20 Pareto generator rule and Unconditional Truths First.
  */
+/**
+ * Resilient JSON Extractor that parses full or partial JSON from LLM outputs,
+ * stripping markdown code fences, comments, single quotes, trailing commas,
+ * and repairing unclosed brackets/braces.
+ */
+export function extractAndParseJSON<T>(text: string): T | null {
+  if (!text) return null;
+
+  let candidate = text.trim();
+  // Check for ```json ... ``` (even with conversational text before or after)
+  const codeBlockMatch = candidate.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (codeBlockMatch) {
+    candidate = codeBlockMatch[1].trim();
+  } else {
+    const firstBrace = candidate.indexOf('{');
+    const firstBracket = candidate.indexOf('[');
+
+    let startIdx = -1;
+    let endIdx = -1;
+
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+      startIdx = firstBracket;
+      endIdx = candidate.lastIndexOf(']');
+    } else if (firstBrace !== -1) {
+      startIdx = firstBrace;
+      endIdx = candidate.lastIndexOf('}');
+    }
+
+    if (startIdx !== -1 && endIdx > startIdx) {
+      candidate = candidate.slice(startIdx, endIdx + 1).trim();
+    }
+  }
+
+  const tryParse = (str: string): T | null => {
+    try {
+      const parsed = JSON.parse(str);
+      if (Array.isArray(parsed)) {
+        return { nodes: parsed } as unknown as T;
+      }
+      return parsed as T;
+    } catch {
+      return null;
+    }
+  };
+
+  // 1. Direct parse attempt
+  let res = tryParse(candidate);
+  if (res) return res;
+
+  // 2. Strip comments
+  let cleaned = candidate
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^\\])\/\/.*$/gm, '$1');
+
+  // 3. Strip trailing commas before } or ]
+  cleaned = cleaned.replace(/,\s*([}\]])/g, '$1');
+  res = tryParse(cleaned);
+  if (res) return res;
+
+  // 4. Convert single-quoted keys/strings to double-quoted JSON
+  const doubleQuoted = cleaned.replace(/'([^'\\]*(?:\\.[^'\\]*)*)'/g, (_, inner) => {
+    return '"' + inner.replace(/"/g, '\\"') + '"';
+  });
+  res = tryParse(doubleQuoted.replace(/,\s*([}\]])/g, '$1'));
+  if (res) return res;
+
+  // 5. Bracket and brace repair for truncated JSON
+  try {
+    let repaired = doubleQuoted.replace(/,\s*([}\]])/g, '$1').replace(/,\s*$/, '');
+    const openBraces = (repaired.match(/\{/g) || []).length;
+    const closeBraces = (repaired.match(/\}/g) || []).length;
+    const openBrackets = (repaired.match(/\[/g) || []).length;
+    const closeBrackets = (repaired.match(/\]/g) || []).length;
+
+    for (let i = 0; i < openBrackets - closeBrackets; i++) repaired += ']';
+    for (let i = 0; i < openBraces - closeBraces; i++) repaired += '}';
+
+    res = tryParse(repaired);
+    if (res) return res;
+  } catch {
+    // continue
+  }
+
+  return null;
+}
+
+/**
+ * Regex-based object extractor for severely mangled or truncated JSON from LLMs.
+ * Extracts individual unit and node objects directly from the JSON text without relying on JSON.parse.
+ */
+export function extractFromMangledJSON(text: string): DistilledCourseInput | null {
+  // Check if text looks like JSON containing nodes, units, cards, or is a JSON array
+  if (!/(?:"nodes"|'nodes'|"units"|'units'|"cards"|'cards'|"concepts"|'concepts'|"flashcards"|'flashcards')\s*:/i.test(text) && !/^\s*\[/i.test(text)) return null;
+
+  const codeMatch = text.match(/["']code["']\s*:\s*["']([^"']+)["']/i);
+  const titleMatch = text.match(/["']title["']\s*:\s*["']([^"']+)["']/i);
+  const examTitleMatch = text.match(/["']examTitle["']\s*:\s*["']([^"']+)["']/i);
+
+  // Extract units
+  const units: DistilledUnitInput[] = [];
+  const unitsArrayMatch = text.match(/["']units["']\s*:\s*\[([\s\S]*?)\]\s*(?:,\s*["']|$|\})/i);
+  if (unitsArrayMatch) {
+    const unitBlocks = unitsArrayMatch[1].matchAll(/\{([^{}]+)\}/g);
+    let uNum = 1;
+    for (const b of unitBlocks) {
+      const uText = b[1];
+      const uTitle = uText.match(/["']title["']\s*:\s*["']([^"']+)["']/i);
+      const uSub = uText.match(/["']subtitle["']\s*:\s*["']([^"']+)["']/i);
+      const uPriming = uText.match(/["']primingSummary["']\s*:\s*["']([^"']+)["']/i);
+      const uUncond = uText.match(/["']unconditionalTruthSummary["']\s*:\s*["']([^"']+)["']/i);
+      if (uTitle && !/^(code|title|units|nodes)$/i.test(uTitle[1])) {
+        units.push({
+          id: `u${uNum}`,
+          number: uNum,
+          title: uTitle[1].trim(),
+          subtitle: uSub ? uSub[1].trim() : undefined,
+          primingSummary: uPriming ? uPriming[1].trim() : undefined,
+          unconditionalTruthSummary: uUncond ? uUncond[1].trim() : undefined,
+        });
+        uNum++;
+      }
+    }
+  }
+
+  // Extract nodes
+  const nodes: DistilledConceptInput[] = [];
+  const nodesArrayMatch = text.match(/["'](?:nodes|cards|concepts|flashcards|items)["']\s*:\s*\[([\s\S]*?)\]\s*(?:,\s*["']|$|\})/i);
+  const nodesSearchSpace = nodesArrayMatch ? nodesArrayMatch[1] : text;
+
+  const nodeBlocks = nodesSearchSpace.matchAll(/\{([^{}]+)\}/g);
+  for (const b of nodeBlocks) {
+    const nText = b[1];
+    const nTitle = nText.match(/["'](?:title|concept|term|name)["']\s*:\s*["']([^"']+)["']/i);
+    const nStmt = nText.match(/["'](?:statement|definition|rule|description|summary)["']\s*:\s*["']([^"']+)["']/i);
+
+    if (nTitle && nStmt) {
+      const title = nTitle[1].trim().replace(/^[*_#`\s{}[\],"]+|[*_#`:\s{}[\],"]+$/g, '');
+      const statement = nStmt[1].trim().replace(/^[*_#`\s{}[\],"]+|[*_#`:\s{}[\],"]+$/g, '');
+      // Guard against top-level metadata or blacklisted schema keys matching as a node
+      if (JSON_KEY_BLACKLIST.has(title.toLowerCase())) continue;
+      if (/^(code|title|id|units|nodes|examTitle|institutionTag|lastUpdated)$/i.test(title)) continue;
+
+      const hook = nText.match(/["']motivatedHook["']\s*:\s*["']([^"']+)["']/i);
+      const rule = nText.match(/["']keyFormulaOrRule["']\s*:\s*["']([^"']+)["']/i);
+      const confusable = nText.match(/["']confusableWith["']\s*:\s*["']([^"']+)["']/i);
+      const isUncond = /["']isUnconditionalTruth["']\s*:\s*true/i.test(nText);
+
+      nodes.push({
+        title,
+        statement,
+        isUnconditionalTruth: isUncond,
+        motivatedHook: hook ? hook[1].trim() : undefined,
+        keyFormulaOrRule: rule ? rule[1].trim() : undefined,
+        confusableWith: confusable ? confusable[1].trim() : undefined,
+      });
+    }
+  }
+
+  if (nodes.length > 0) {
+    return {
+      code: codeMatch ? codeMatch[1].trim() : undefined,
+      title: titleMatch ? titleMatch[1].trim() : undefined,
+      examTitle: examTitleMatch ? examTitleMatch[1].trim() : undefined,
+      units: units.length > 0 ? units : undefined,
+      nodes,
+    };
+  }
+
+  return null;
+}
+
 export function compileNotesToCoursePackLocally(params: {
   title: string;
   code: string;
@@ -375,31 +571,29 @@ export function compileNotesToCoursePackLocally(params: {
 }): CoursePack {
   const trimmed = params.rawText.trim();
 
-  // 1. Check if raw text is already JSON or contains embedded JSON
-  const jsonMatch =
-    trimmed.startsWith('{')
-      ? trimmed
-      : trimmed.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/)?.[1] ||
-        trimmed.match(/(\{[\s\S]*"nodes"[\s\S]*\})/)?.[1] ||
-        null;
-
-  if (jsonMatch) {
-    try {
-      const parsed = JSON.parse(jsonMatch) as DistilledCourseInput;
-      if (parsed && ((Array.isArray(parsed.nodes) && parsed.nodes.length > 0) || (Array.isArray(parsed.units) && parsed.units.length > 0))) {
-        return hydrateCoursePack({
-          ...parsed,
-          code: parsed.code || params.code,
-          title: parsed.title || params.title,
-          examTitle: parsed.examTitle || params.examTitle,
-        });
-      }
-    } catch {
-      // Not valid JSON, continue with intelligent text extraction
-    }
+  // 1. Stage A: Multi-Stage Resilient JSON Parser
+  const parsedJson = extractAndParseJSON<DistilledCourseInput>(trimmed);
+  if (parsedJson && ((Array.isArray(parsedJson.nodes) && parsedJson.nodes.length > 0) || (Array.isArray(parsedJson.units) && parsedJson.units.length > 0))) {
+    return hydrateCoursePack({
+      ...parsedJson,
+      code: parsedJson.code || params.code,
+      title: parsedJson.title || params.title,
+      examTitle: parsedJson.examTitle || params.examTitle,
+    });
   }
 
-  // 2. Intelligent Line-by-Line Outline Parsing
+  // 2. Stage B: Regex Fallback for Mangled or Truncated JSON
+  const mangledParsed = extractFromMangledJSON(trimmed);
+  if (mangledParsed && mangledParsed.nodes && mangledParsed.nodes.length > 0) {
+    return hydrateCoursePack({
+      ...mangledParsed,
+      code: mangledParsed.code || params.code,
+      title: mangledParsed.title || params.title,
+      examTitle: mangledParsed.examTitle || params.examTitle,
+    });
+  }
+
+  // 3. Stage C: Intelligent Line-by-Line Outline Parsing for Raw Notes
   const rawLines = trimmed
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -425,10 +619,14 @@ export function compileNotesToCoursePackLocally(params: {
 
     // Skip JSON syntax lines: braces, brackets, commas, quotes
     if (/^[{}[\],;'"\s]+$/.test(line)) continue;
-    if (/^["']?(id|lastUpdated|units|nodes|quizletStages|predictionPrompt|teachingStep|examTitle|description)["']?\s*:/i.test(line)) continue;
+    // Skip any line starting with a quoted or unquoted JSON key (e.g. "code": "...", "statement": "...")
+    if (/^["']?[a-zA-Z0-9_$-]+["']?\s*:/i.test(line)) {
+      const keyName = line.match(/^["']?([a-zA-Z0-9_$-]+)["']?\s*:/i)?.[1]?.toLowerCase() || '';
+      if (JSON_KEY_BLACKLIST.has(keyName)) continue;
+    }
 
     // Skip standalone key names or schema labels
-    if (/^["']?(code|title|institutionTag|examTitle|lastUpdated|description|units|nodes|prerequisites|examWeight)["']?$/i.test(line)) continue;
+    if (/^["']?(code|title|institutionTag|examTitle|lastUpdated|description|units|nodes|prerequisites|examWeight|subtitle|statement|motivatedHook)["']?$/i.test(line)) continue;
     if (/^(course identity|course metadata|meta|metadata|identity|curriculum structure)[:.]?$/i.test(line)) continue;
 
     // Skip autobiographical / first-person chat lines from previous AI tutoring sessions
@@ -467,6 +665,9 @@ export function compileNotesToCoursePackLocally(params: {
   };
 
   for (const line of cleanLines) {
+    // Strictly discard lines with JSON braces or brackets from line-by-line notes parsing
+    if (/[{}[\]]/.test(line)) continue;
+
     if (isHeadingLine(line)) {
       const headingClean = line
         .replace(/^#{1,3}\s+/, '')
@@ -494,8 +695,14 @@ export function compileNotesToCoursePackLocally(params: {
     const sepMatch = cleanedLine.match(/^(\*\*?[^*:]+\*\*?|[^:—–]{3,65})\s*(?::|—|–|\s-\s)\s*(.{12,})$/);
 
     if (sepMatch) {
-      const rawTerm = sepMatch[1].replace(/[*_#`"']/g, '').trim();
-      const rawStatement = sepMatch[2].replace(/[*_`]/g, '').trim();
+      // Discard if the raw line looked like a JSON key (starts with quote or braces)
+      if (/^["'{}[\],]/.test(cleanedLine)) continue;
+
+      const rawTerm = sepMatch[1].replace(/[*_#`"'{}[\],]/g, '').trim();
+      const rawStatement = sepMatch[2].replace(/[*_`"'{}[\],]/g, '').trim();
+
+      // Guard: strictly block any JSON schema key from ever becoming a concept title
+      if (JSON_KEY_BLACKLIST.has(rawTerm.toLowerCase())) continue;
 
       // Reject non-concept lines (e.g. "Note:", "Warning:", "Example:")
       if (!/^(note|warning|example|caution|hint|tip|summary|conclusion|intro)$/i.test(rawTerm)) {
@@ -515,6 +722,8 @@ export function compileNotesToCoursePackLocally(params: {
     if (boldLeadMatch) {
       const rawTerm = boldLeadMatch[1].trim();
       const rawStatement = boldLeadMatch[2].trim();
+      if (JSON_KEY_BLACKLIST.has(rawTerm.toLowerCase())) continue;
+
       activeUnit.items.push({
         title: rawTerm,
         statement: rawStatement.startsWith('is ') || rawStatement.startsWith('states ')
@@ -526,10 +735,12 @@ export function compileNotesToCoursePackLocally(params: {
     }
 
     // Pattern C: Significant definition sentence (>= 35 chars, contains causal or definitional words)
-    if (cleanedLine.length >= 35 && /is defined as|represents|governs|determines|causes|results in|requires that|must hold/i.test(cleanedLine)) {
+    if (cleanedLine.length >= 35 && !/^["'{}[\],]/.test(cleanedLine) && /is defined as|represents|governs|determines|causes|results in|requires that|must hold/i.test(cleanedLine)) {
       // Pick first 3-5 words as clean title
       const words = cleanedLine.replace(/[*_`]/g, '').split(/\s+/);
       const titleCandidate = words.slice(0, Math.min(4, words.length)).join(' ').replace(/[.,;:]$/, '');
+      if (JSON_KEY_BLACKLIST.has(titleCandidate.toLowerCase())) continue;
+
       activeUnit.items.push({
         title: titleCandidate,
         statement: cleanedLine.replace(/[*_`]/g, ''),
