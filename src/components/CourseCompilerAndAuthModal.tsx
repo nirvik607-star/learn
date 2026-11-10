@@ -19,7 +19,11 @@ import {
   genericProviderKeyGuard,
   maskKey,
 } from '../core/auth-keys';
-import { compileNotesToCoursePackLocally } from '../engine/courseCompiler';
+import {
+  compileNotesToCoursePackLocally,
+  extractAndParseJSON,
+  extractFromMangledJSON,
+} from '../engine/courseCompiler';
 import {
   compileCourseWithAI,
   refineCourseWithAI,
@@ -1370,6 +1374,60 @@ export const CourseCompilerAndAuthModal: React.FC<
               placeholder={`Paste Agent JSON or raw notes:\n# Unit 1: Problem Discovery\n- Bottleneck Inversion: High-leverage AI starts at constraints...`}
               style={{ fontSize: '0.78rem' }}
             />
+
+            {importOrNotesInput.trim() && (() => {
+              const trimmed = importOrNotesInput.trim();
+              const hasJson = /[{}[\]]/.test(trimmed);
+              const parsed = extractAndParseJSON<any>(trimmed);
+              const mangled = !parsed ? extractFromMangledJSON(trimmed) : null;
+              const nodeCount = parsed?.nodes?.length || (Array.isArray(parsed) ? parsed.length : 0) || mangled?.nodes?.length || 0;
+              const unitCount = parsed?.units?.length || mangled?.units?.length || (nodeCount > 0 ? 1 : 0);
+
+              if (nodeCount > 0) {
+                return (
+                  <div style={{
+                    fontSize: '0.74rem',
+                    padding: '6px 10px',
+                    borderRadius: '4px',
+                    background: 'rgba(74, 222, 128, 0.12)',
+                    border: '1px solid var(--success)',
+                    color: 'var(--success)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontWeight: 600,
+                  }}>
+                    <span>✅ Valid Course Structure Detected: <strong>{nodeCount} Concepts</strong> across <strong>{unitCount} Units</strong></span>
+                  </div>
+                );
+              }
+              if (hasJson) {
+                return (
+                  <div style={{
+                    fontSize: '0.74rem',
+                    padding: '6px 10px',
+                    borderRadius: '4px',
+                    background: 'rgba(234, 179, 8, 0.12)',
+                    border: '1px solid var(--warning)',
+                    color: 'var(--warning)',
+                  }}>
+                    <span>⚠️ Partial JSON format. The 0-Token Engine will extract high-yield concepts safely without schema key cards.</span>
+                  </div>
+                );
+              }
+              return (
+                <div style={{
+                  fontSize: '0.74rem',
+                  padding: '6px 10px',
+                  borderRadius: '4px',
+                  background: 'rgba(59, 130, 246, 0.1)',
+                  border: '1px solid var(--accent-primary)',
+                  color: 'var(--text-secondary)',
+                }}>
+                  <span>📝 Raw Notes / Outline detected — 0-Token Engine will organize into 3–5 units and Pareto concepts.</span>
+                </div>
+              );
+            })()}
 
             {compileNotice && (
               <div

@@ -265,6 +265,17 @@ export function App() {
     return courses.find((c) => c.id === selectedCourseId) || courses[0];
   }, [courses, selectedCourseId]);
 
+  const isCorruptedCourse = useMemo(() => {
+    if (!currentCourse || !currentCourse.nodes || currentCourse.nodes.length === 0) return false;
+    const firstTitle = (currentCourse.nodes[0]?.title || '').replace(/["'{}[\]]/g, '').trim().toLowerCase();
+    if (firstTitle === 'code' || firstTitle === 'id') return true;
+    const schemaMatches = currentCourse.nodes.filter((n) => {
+      const clean = (n.title || '').replace(/["'{}[\]]/g, '').trim().toLowerCase();
+      return /^(id|code|title|subtitle|statement|primingsummary|motivatedhook|keyformulaorrule|examweight|units|nodes)$/i.test(clean);
+    }).length;
+    return schemaMatches >= 3;
+  }, [currentCourse]);
+
   const simulatedNow = useMemo(() => {
     return Date.now() + simulatedHoursOffset * 3600 * 1000;
   }, [simulatedHoursOffset, masteryMap]);
@@ -400,15 +411,22 @@ export function App() {
     setActiveTab('command_center');
   };
 
-  const handleDeleteCourse = (courseId: string) => {
+  const handleDeleteCourse = (courseId: string, skipPrompt = false) => {
     const target = courses.find((c) => c.id === courseId);
     const name = target?.title || target?.code || 'this study set';
-    if (
-      !window.confirm(
-        `Are you sure you want to delete the study set "${name}"?\n\nThis will remove all its units, concepts, and progress.`
-      )
-    ) {
-      return;
+    const isTargetCorrupted = target && (
+      (target.nodes[0]?.title || '').replace(/["'{}[\]]/g, '').trim().toLowerCase() === 'code' ||
+      target.nodes.filter(n => /^(id|code|title|subtitle|statement)$/i.test(n.title.replace(/["'{}[\]]/g, '').trim())).length >= 3
+    );
+
+    if (!skipPrompt && !isTargetCorrupted) {
+      if (
+        !window.confirm(
+          `Are you sure you want to delete the study set "${name}"?\n\nThis will remove all its units, concepts, and progress.`
+        )
+      ) {
+        return;
+      }
     }
     const nextCourses = courses.filter((c) => c.id !== courseId);
     setCourses(nextCourses);
@@ -572,10 +590,29 @@ export function App() {
                     </option>
                   ))}
                 </select>
+                {isCorruptedCourse && (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      color: 'var(--danger)',
+                      background: 'var(--danger-subtle)',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    Corrupted Set
+                  </span>
+                )}
                 <button
                   type="button"
                   className="btn btn-sm"
-                  style={{ padding: '6px 8px', color: 'var(--danger)' }}
+                  style={{
+                    padding: '6px 8px',
+                    color: isCorruptedCourse ? '#fff' : 'var(--danger)',
+                    background: isCorruptedCourse ? 'var(--danger)' : undefined,
+                  }}
                   onClick={() => handleDeleteCourse(currentCourse.id)}
                   title={`Delete study set "${currentCourse.title}"`}
                   aria-label="Delete this study set"
@@ -894,6 +931,62 @@ export function App() {
 
         {/* Center Main Stage (Animated page transitions) */}
         <main className="ws-center">
+          {/* Corrupted Course Detection Banner */}
+          {isCorruptedCourse && currentCourse && (
+            <div
+              style={{
+                margin: '14px 16px 0 16px',
+                padding: '12px 16px',
+                borderRadius: '8px',
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid var(--danger)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <AlertTriangle size={20} style={{ color: 'var(--danger)', flexShrink: 0 }} />
+                <div>
+                  <div style={{ fontWeight: 700, color: 'var(--danger)', fontSize: '0.88rem' }}>
+                    Corrupted Study Set Detected ({currentCourse.nodes.length} cards with raw JSON keys like &quot;code&quot; and &quot;id&quot;)
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                    This set was created from unparsed JSON keys. The compiler and handoff parser have been upgraded to cleanly extract structured concepts.
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{
+                    background: 'var(--danger)',
+                    color: '#fff',
+                    border: 'none',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontWeight: 600,
+                  }}
+                  onClick={() => handleDeleteCourse(currentCourse.id, true)}
+                >
+                  <Trash2 size={13} /> Delete Corrupted Set
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  onClick={() => setActiveTab('compiler_and_auth')}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <Sparkles size={13} /> Open Setup to Repaste
+                </button>
+              </div>
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             <motion.div
               key={activeTab}
