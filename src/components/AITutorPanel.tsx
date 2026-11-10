@@ -138,7 +138,7 @@ export const AITutorPanel: React.FC<AITutorPanelProps> = ({
                 </span>
               ) : (
                 <span className="badge" style={{ fontSize: '0.62rem', padding: '1px 6px' }}>
-                  0-Token
+                  AI Offline
                 </span>
               )}
             </div>
@@ -214,7 +214,7 @@ export const AITutorPanel: React.FC<AITutorPanelProps> = ({
             </div>
           </div>
         )}
-        {!connected && <AILock label="0-token mode. Connect AI for a live tutor" onConnect={onConnect} />}
+        {!connected && <AILock label="Connect Grok or OpenAI to activate live Socratic Tutor" onConnect={onConnect} />}
         {history.length === 0 && node && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>{node.motivatedHook}</div>

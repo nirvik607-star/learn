@@ -84,13 +84,15 @@ export function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Purge legacy mock courses so returning visitors get clean slate
-          const filtered = parsed.filter(
-            (c) =>
-              c.id !== 'cs-transformers-harness' &&
-              c.id !== 'bio-premed-energetics' &&
-              c.id !== 'econ-game-probability'
-          );
+          // Purge legacy mock courses and corrupted schema-key sets on initial load
+          const filtered = parsed
+            .filter(
+              (c) =>
+                c.id !== 'cs-transformers-harness' &&
+                c.id !== 'bio-premed-energetics' &&
+                c.id !== 'econ-game-probability'
+            )
+            .filter((c) => !isCorruptedCoursePack(c));
           return filtered;
         }
       }

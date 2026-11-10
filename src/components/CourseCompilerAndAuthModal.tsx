@@ -20,7 +20,6 @@ import {
   maskKey,
 } from '../core/auth-keys';
 import {
-  compileNotesToCoursePackLocally,
   extractAndParseJSON,
   extractFromMangledJSON,
   hydrateCoursePack,
@@ -34,7 +33,7 @@ import {
   notifyAIStatusChanged,
   type AITestResult,
 } from '../engine/aiClient';
-import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
+import { useAIConnected, TypingDots } from './AITutorPanel';
 
 // Borrowed directly from amosblomqvist/learnharness components/settings/chatgpt-connection.tsx & subscription-connections.tsx
 export const CHATGPT_NOTICE =
@@ -1050,39 +1049,10 @@ export const CourseCompilerAndAuthModal: React.FC<
       const msg = err instanceof Error ? err.message : String(err);
       setCompileNotice({
         ok: false,
-        text: `❌ AI Compilation Failed: ${msg}. You can test connection above or build locally with the 0-Token engine.`,
+        text: `❌ AI Compilation Failed: ${msg}. Please verify your API key and connection below.`,
       });
     } finally {
       setCompilingAI(false);
-    }
-  };
-
-  const handleBuildLocallyOnly = () => {
-    const trimmed = importOrNotesInput.trim();
-    if (!trimmed) {
-      setCompileNotice({ ok: false, text: 'Paste your notes or text first.' });
-      return;
-    }
-    try {
-      const compiled = compileNotesToCoursePackLocally({
-        title: courseCode.trim() || 'My Study Set',
-        code: courseCode.trim() || 'COURSE 101',
-        examTitle: examName.trim() || 'Exam',
-        rawText: trimmed,
-      });
-      if (trimmed.startsWith('{')) {
-        onImportCourseJson(compiled);
-      } else {
-        onAddCompiledCourse(compiled);
-      }
-      setImportOrNotesInput('');
-      setCompileNotice({
-        ok: true,
-        text: `Created "${compiled.title}" (${compiled.units.length} Units, ${compiled.nodes.length} concepts) via 0-Token Engine.`,
-      });
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      setCompileNotice({ ok: false, text: `Build failed: ${msg}` });
     }
   };
 
@@ -1092,12 +1062,12 @@ export const CourseCompilerAndAuthModal: React.FC<
     if (!trimmed) {
       setCompileNotice({
         ok: false,
-        text: 'Paste your notes or JSON first.',
+        text: 'Paste your notes or study material first.',
       });
       return;
     }
 
-    // 1. If valid pre-structured JSON with concepts, import directly without re-analyzing
+    // 1. If valid pre-structured JSON with concepts, import directly
     const parsed = extractAndParseJSON<DistilledCourseInput>(trimmed);
     if (parsed && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
       try {
@@ -1119,14 +1089,17 @@ export const CourseCompilerAndAuthModal: React.FC<
       }
     }
 
-    // 2. If AI is connected, deeply analyze all input data!
-    if (aiConnected) {
-      await handleCompileDirectlyWithAI();
+    // 2. AI is required to analyze notes and determine the study structure!
+    if (!aiConnected) {
+      setCompileNotice({
+        ok: false,
+        text: 'AI Connection Required: Please enter your Grok (xAI) or OpenAI API key below so AI can analyze your material.',
+      });
+      document.getElementById('provider-credentials-section')?.scrollIntoView({ behavior: 'smooth' });
       return;
     }
 
-    // 3. Fallback to 0-Token Local Compiler
-    handleBuildLocallyOnly();
+    await handleCompileDirectlyWithAI();
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1448,7 +1421,7 @@ export const CourseCompilerAndAuthModal: React.FC<
                     border: '1px solid var(--warning)',
                     color: 'var(--warning)',
                   }}>
-                    <span>⚠️ Partial JSON format. The 0-Token Engine will extract high-yield concepts safely without schema key cards.</span>
+                    <span>⚠️ Raw JSON snippet detected — AI will analyze and synthesize it into clean load-bearing concepts.</span>
                   </div>
                 );
               }
@@ -1461,7 +1434,7 @@ export const CourseCompilerAndAuthModal: React.FC<
                   border: '1px solid var(--accent-primary)',
                   color: 'var(--text-secondary)',
                 }}>
-                  <span>📝 Raw Notes / Outline detected — 0-Token Engine will organize into 3–5 units and Pareto concepts.</span>
+                  <span>📝 Study Notes / Outline detected — AI will extract 3–5 units and high-yield concepts.</span>
                 </div>
               );
             })()}
@@ -1481,32 +1454,22 @@ export const CourseCompilerAndAuthModal: React.FC<
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {aiConnected ? (
-              <>
-                <button
-                  type="submit"
-                  className="btn btn-primary"
-                  disabled={compilingAI}
-                  style={{ fontWeight: 700, padding: '10px 14px' }}
-                >
-                  <Sparkles size={15} /> {compilingAI ? 'Analyzing Input & Synthesizing Knowledge Graph...' : `✨ Deep Analyze & Build with ${activeAI?.name || 'Connected AI'}`}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-sm btn-ghost"
-                  onClick={handleBuildLocallyOnly}
-                  style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}
-                  title="Skip AI and run fast deterministic offline parser"
-                >
-                  Offline Mode: Compile with 0-Token Local Engine
-                </button>
-              </>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={compilingAI}
+                style={{ fontWeight: 700, padding: '10px 14px' }}
+              >
+                <Sparkles size={15} /> {compilingAI ? 'Analyzing Input & Synthesizing Knowledge Graph...' : `✨ Analyze & Build Study Set with ${activeAI?.name || 'Grok (xAI)'}`}
+              </button>
             ) : (
-              <>
-                <AILock label="Connect Grok, OpenAI, or Claude for Deep AI Conceptual Analysis" />
-                <button type="submit" className="btn btn-primary" style={{ fontWeight: 700 }}>
-                  Build Locally (0-Token Mode)
-                </button>
-              </>
+              <button
+                type="submit"
+                className="btn btn-primary"
+                style={{ fontWeight: 700, padding: '10px 14px', background: 'var(--accent)' }}
+              >
+                <Sparkles size={15} /> Connect AI (Grok / OpenAI) to Build Study Set
+              </button>
             )}
             {compilingAI && <div style={{ alignSelf: 'center' }}><TypingDots /></div>}
             <div style={{ display: 'flex', gap: '6px' }}>
