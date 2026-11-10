@@ -17,6 +17,70 @@ import type {
   FailureCategory,
   CourseReadinessReport,
 } from '../types/harness';
+import { motion, AnimatePresence } from 'motion/react';
+import { generateVariant, gradeWithRubric, type VariantQuestion, type AIGradeResult } from '../engine/aiClient';
+import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
+
+/** AI writes a fresh-surface variant targeting the logged failure type, then grades the retry. */
+const VariantRetest: React.FC<{ course: CoursePack; mistake: MistakeRecord; onCleared: () => void; onConnectAI?: () => void }> = ({ course, mistake, onCleared, onConnectAI }) => {
+  const connected = useAIConnected();
+  const node = course.nodes.find((n) => n.id === mistake.nodeId);
+  const [variant, setVariant] = useState<VariantQuestion | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [answer, setAnswer] = useState('');
+  const [grade, setGrade] = useState<AIGradeResult | null>(null);
+  if (!node) return null;
+  if (!connected) return <AILock label="Connect AI to generate fresh-surface retest questions" onConnect={onConnectAI} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {!variant && (
+        <button
+          className="btn btn-sm"
+          disabled={loading}
+          style={{ alignSelf: 'flex-start' }}
+          onClick={async () => {
+            setLoading(true);
+            setVariant(await generateVariant(node, mistake.question, mistake.learnerAnswer, mistake.failureCategory));
+            setLoading(false);
+          }}
+        >
+          <Sparkles size={13} /> {loading ? 'Writing a fresh variant...' : 'AI fresh-surface retest'}
+        </button>
+      )}
+      {loading && <TypingDots />}
+      <AnimatePresence>
+        {variant && (
+          <motion.form
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            style={{ display: 'flex', flexDirection: 'column', gap: 8, overflow: 'hidden' }}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              setLoading(true);
+              const g = await gradeWithRubric(node, variant.question, answer, 'application');
+              setLoading(false);
+              setGrade(g);
+              if (g?.correct) setTimeout(onCleared, 900);
+            }}
+          >
+            <div className="ai-msg assistant"><span className="ai-chip">Fresh surface</span><div style={{ marginTop: 4 }}>{variant.question}</div></div>
+            <textarea className="textarea" rows={2} value={answer} onChange={(e) => setAnswer(e.target.value)} placeholder="Answer cold, without looking at the repair rule..." />
+            <button className="btn btn-sm btn-primary" type="submit" disabled={!answer.trim() || loading} style={{ alignSelf: 'flex-start' }}>Grade my retry</button>
+            {grade && (
+              <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="ai-msg assistant" style={{ borderColor: grade.correct ? 'var(--success)' : 'var(--danger)' }}>
+                <strong style={{ color: grade.correct ? 'var(--success)' : 'var(--danger)' }}>{grade.correct ? 'Cleared. Mistake repaired.' : `Not yet (${grade.score}/100)`}</strong>
+                <div>{grade.feedback}</div>
+                {!grade.correct && <div style={{ marginTop: 4, color: 'var(--text-muted)' }}>Model answer: {variant.answer}</div>}
+              </motion.div>
+            )}
+          </motion.form>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+};
 
 interface MistakeNotebookAndCramProps {
   course: CoursePack;
@@ -31,6 +95,7 @@ interface MistakeNotebookAndCramProps {
     learnerAnswer: string,
     failureType: FailureCategory
   ) => void;
+  onConnectAI?: () => void;
 }
 
 const FAILURE_LABELS: Record<
@@ -72,6 +137,7 @@ export const MistakeNotebookAndCram: React.FC<MistakeNotebookAndCramProps> = ({
   onStartMistakeDrill,
   onResolveMistake,
   onAddManualMistake,
+  onConnectAI,
 }) => {
   const [activeTab, setActiveTab] = useState<'mistakes' | 'cram_sheet'>(initialTab);
   const [showResolved, setShowResolved] = useState(false);
@@ -397,6 +463,9 @@ export const MistakeNotebookAndCram: React.FC<MistakeNotebookAndCramProps> = ({
                     <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
                       <strong>Cognitive Prescription:</strong> {meta.prescription}
                     </div>
+                    {!mistake.retestedAndCleared && (
+                      <VariantRetest course={course} mistake={mistake} onCleared={() => onResolveMistake(mistake.id)} onConnectAI={onConnectAI} />
+                    )}
                   </div>
                 );
               })}

@@ -20,6 +20,8 @@ import {
   maskKey,
 } from '../core/auth-keys';
 import { compileNotesToCoursePackLocally } from '../engine/courseCompiler';
+import { compileCourseWithAI } from '../engine/aiClient';
+import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
 
 // Borrowed directly from amosblomqvist/learnharness components/settings/chatgpt-connection.tsx & subscription-connections.tsx
 export const CHATGPT_NOTICE =
@@ -232,6 +234,8 @@ export const CourseCompilerAndAuthModal: React.FC<
     ok: boolean;
     text: string;
   } | null>(null);
+  const aiConnected = useAIConnected();
+  const [compilingAI, setCompilingAI] = useState(false);
 
   // LearnHarness Providers state (borrowed from keys-section.tsx & chatgpt-connection.tsx)
   const [localKeys, setLocalKeys] = useState<Record<string, string>>(() => {
@@ -961,6 +965,43 @@ export const CourseCompilerAndAuthModal: React.FC<
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
+  const handleCompileDirectlyWithAI = async () => {
+    const trimmed = importOrNotesInput.trim();
+    if (!trimmed) {
+      setCompileNotice({ ok: false, text: 'Paste lecture notes or text first.' });
+      return;
+    }
+    setCompilingAI(true);
+    setCompileNotice({ ok: true, text: 'AI is synthesizing units, knowledge graph, and 4-stage Quizlet items...' });
+    try {
+      const compiled = await compileCourseWithAI(
+        trimmed,
+        courseCode.trim() || 'My Course',
+        examName.trim() || 'Upcoming Exam',
+        promptText
+      );
+      if (compiled && Array.isArray(compiled.nodes) && compiled.nodes.length > 0) {
+        onAddCompiledCourse(compiled);
+        setImportOrNotesInput('');
+        setCompileNotice({ ok: true, text: `AI compiled "${compiled.title}" with ${compiled.nodes.length} concepts & 4 Quizlet stages.` });
+      } else {
+        // Fallback to local regex compiler
+        const local = compileNotesToCoursePackLocally({
+          title: courseCode.trim() || 'My Study Set',
+          code: courseCode.trim() || 'COURSE 101',
+          examTitle: examName.trim() || 'Exam',
+          rawText: trimmed,
+        });
+        onAddCompiledCourse(local);
+        setImportOrNotesInput('');
+        setCompileNotice({ ok: true, text: `AI parse failed; compiled locally into "${local.title}" (${local.nodes.length} concepts).` });
+      }
+    } catch {
+      setCompileNotice({ ok: false, text: 'AI compile request failed. Try local build or paste JSON.' });
+    } finally {
+      setCompilingAI(false);
+    }
+  };
   const handleBuildOrImportCourse = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = importOrNotesInput.trim();
@@ -1193,8 +1234,21 @@ export const CourseCompilerAndAuthModal: React.FC<
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button type="submit" className="btn btn-primary">
-              <Sparkles size={14} /> Build Study Set
+            {aiConnected ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={compilingAI}
+                onClick={handleCompileDirectlyWithAI}
+              >
+                <Sparkles size={14} /> {compilingAI ? 'AI Compiling Full Course Pack...' : 'Compile Directly with Connected AI'}
+              </button>
+            ) : (
+              <AILock label="Connect AI to compile notes directly in-app" />
+            )}
+            {compilingAI && <div style={{ alignSelf: 'center' }}><TypingDots /></div>}
+            <button type="submit" className="btn btn-sm">
+              Build Locally (0-Token) or Load JSON
             </button>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button

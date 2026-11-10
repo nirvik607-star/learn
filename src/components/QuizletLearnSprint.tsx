@@ -1,4 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { gradeWithRubric, adaptiveHint, socraticTurn, type AIGradeResult } from '../engine/aiClient';
+import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
 import {
   AlertTriangle,
   ArrowRight,
@@ -52,6 +55,8 @@ interface QuizletLearnSprintProps {
   }) => { tierPromoted: boolean; previousTier: MasteryTier; newTier: MasteryTier };
   onBackToDashboard: () => void;
   onLocalZeroTokenTick: () => void;
+  onStudyContext?: (nodeId: string, context: string) => void;
+  onConnectAI?: () => void;
 }
 
 const TIER_NAMES: Record<MasteryTier, string> = {
@@ -70,6 +75,8 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
   focusNodeId = null,
   onRecordAttempt,
   onBackToDashboard,
+  onStudyContext,
+  onConnectAI,
   onLocalZeroTokenTick,
 }) => {
   const [unitFilter, setUnitFilter] = useState<string | 'all'>(initialUnitFilter);
@@ -103,6 +110,11 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
   const [aiCoachLoading, setAiCoachLoading] = useState(false);
   const [aiCoachReply, setAiCoachReply] = useState<string | null>(null);
   const [aiCoachProvider, setAiCoachProvider] = useState<string | null>(null);
+  const aiConnected = useAIConnected();
+  const [aiGrade, setAiGrade] = useState<AIGradeResult | null>(null);
+  const [aiGrading, setAiGrading] = useState(false);
+  const [aiHints, setAiHints] = useState<Record<number, string>>({});
+  const [hintLoading, setHintLoading] = useState(false);
 
   const startNewRound = (selectedUnit: string | 'all' = unitFilter) => {
     let items = buildQuizletLearnRound(course, masteryMap, mistakes, selectedUnit, 7);
@@ -154,12 +166,33 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
     setPromotionBanner(null);
     setAiCoachReply(null);
     setAiCoachProvider(null);
+    setAiGrade(null);
+    setAiGrading(false);
+    setAiHints({});
   };
 
   useEffect(() => {
     startNewRound(initialUnitFilter);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [course.id, initialUnitFilter, focusNodeId]);
+
+  // Feed the right-pane AI tutor what is on screen right now
+  useEffect(() => {
+    const it = roundItems[currentIndex];
+    if (!it || !onStudyContext) return;
+    const q =
+      it.itemType === 'cued_recall'
+        ? it.node.quizletStages.cuedRecall.prompt
+        : it.itemType === 'exam_application'
+        ? it.node.quizletStages.application.examProblem
+        : it.itemType === 'discrimination'
+        ? it.node.quizletStages.discrimination.question
+        : it.itemType === 'recognition_mcq'
+        ? it.node.quizletStages.recognition.question
+        : it.node.predictionPrompt.question;
+    onStudyContext(it.node.id, `Question on screen (${it.itemType}): ${q}${freeAnswer ? `\nLearner draft: ${freeAnswer}` : ''}${submitted ? `\nAlready submitted: ${isCorrect ? 'correct' : 'incorrect'}. Do not reveal answers beyond what was shown.` : '\nNot submitted yet: do NOT give the answer, only minimal hints.'}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentIndex, roundItems, submitted, freeAnswer]);
 
   const currentItem = roundItems[currentIndex];
   if (!currentItem) {
@@ -187,10 +220,32 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
     ];
   };
 
-  const handleRequestNextHint = () => {
+  const currentQuestionText = (): string =>
+    itemType === 'cued_recall'
+      ? node.quizletStages.cuedRecall.prompt
+      : itemType === 'exam_application'
+      ? feynmanExaminerMode
+        ? node.quizletStages.application.feynmanPrompt
+        : node.quizletStages.application.examProblem
+      : itemType === 'discrimination'
+      ? node.quizletStages.discrimination.question
+      : itemType === 'recognition_mcq'
+      ? node.quizletStages.recognition.question
+      : node.predictionPrompt.question;
+
+  const handleRequestNextHint = async () => {
     const next = Math.min(5, hintRung + 1);
     setHintRung(next);
-    onLocalZeroTokenTick();
+    const attempt = (freeAnswer + ' ' + thinkingTrace).trim();
+    if (aiConnected && attempt) {
+      // Adaptive rung written from the learner's actual attempt
+      setHintLoading(true);
+      const h = await adaptiveHint(node, currentQuestionText(), attempt, next);
+      setHintLoading(false);
+      if (h) setAiHints((m) => ({ ...m, [next]: h }));
+    } else {
+      onLocalZeroTokenTick();
+    }
   };
 
   const handleMcqSelect = (optIndex: number) => {
@@ -291,10 +346,9 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
     setVerdictDetail(feedback);
   };
 
-  const handleFreeResponseSubmit = (e: React.FormEvent) => {
+  const handleFreeResponseSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitted || (!freeAnswer.trim() && !thinkingTrace.trim())) return;
-    onLocalZeroTokenTick();
+    if (submitted || aiGrading || (!freeAnswer.trim() && !thinkingTrace.trim())) return;
 
     const mode = itemType === 'cued_recall' ? 'cued_recall' : 'exam_application';
     const evalRes = evaluateFreeResponseLocally(
@@ -304,6 +358,28 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
       thinkingTrace,
       Math.max(0, hintRung)
     );
+
+    // AI semantic grading against the frozen rubric (falls back to local keyword grader)
+    if (aiConnected) {
+      setAiGrading(true);
+      const g = await gradeWithRubric(
+        node,
+        currentQuestionText(),
+        `${freeAnswer}${thinkingTrace ? `\n(Reasoning: ${thinkingTrace})` : ''}`,
+        mode === 'cued_recall' ? 'cued_recall' : 'application'
+      );
+      setAiGrading(false);
+      if (g) {
+        setAiGrade(g);
+        evalRes.correct = g.correct;
+        evalRes.verdictHeadline = g.correct ? `AI Grader: ${g.score}/100. Rubric satisfied` : `AI Grader: ${g.score}/100. Gap found`;
+        evalRes.surgicalFeedback = g.feedback;
+        if (g.failureCategory) evalRes.failureCategory = g.failureCategory;
+        if (!g.correct && g.nextHint) setAiHints((m) => ({ ...m, [Math.max(0, hintRung) + 1]: g.nextHint! }));
+      } else onLocalZeroTokenTick();
+    } else {
+      onLocalZeroTokenTick();
+    }
 
     setSubmitted(true);
     setIsCorrect(evalRes.correct);
@@ -361,31 +437,22 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
 
   const handleAskLiveAiCoach = async (mode: 'socratic_nudge' | 'strict_examiner') => {
     setAiCoachLoading(true);
-    try {
-      const resp = await fetch('/api/ai/tutor', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode,
-          nodeTitle: node.title,
-          nodeStatement: node.statement,
-          learnerInput: freeAnswer,
-          learnerThinking: thinkingTrace,
-        }),
-      });
-      const data = await resp.json();
-      setAiCoachReply(data.reply || 'Focus on the foundational causal step.');
-      setAiCoachProvider(data.provider || 'zero-token-local');
-    } catch {
-      setAiCoachReply(
-        `[Offline Socratic Coach] Connect your reasoning "${
-          thinkingTrace || freeAnswer || 'step 1'
-        }" directly to: ${node.statement}`
-      );
-      setAiCoachProvider('zero-token-local');
-    } finally {
-      setAiCoachLoading(false);
-    }
+    const persona = mode === 'strict_examiner' ? 'strict_examiner' : 'socratic';
+    const reply = aiConnected
+      ? await socraticTurn(
+          node,
+          [{ role: 'user', content: `Question: ${currentQuestionText()}\nMy answer: ${freeAnswer || '(none yet)'}\nMy reasoning: ${thinkingTrace || '(none)'}` }],
+          persona
+        )
+      : null;
+    setAiCoachReply(
+      reply ||
+        (persona === 'strict_examiner'
+          ? `State the exact causal chain without buzzwords: ${node.quizletStages.application.feynmanPrompt}`
+          : `Connect your reasoning "${thinkingTrace || freeAnswer || 'step 1'}" to the core idea: ${node.quizletStages.cuedRecall.hints[2]}`)
+    );
+    setAiCoachProvider(reply ? 'Live AI' : '0-token local');
+    setAiCoachLoading(false);
   };
 
   const handleNextItem = () => {
@@ -562,8 +629,27 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
         </div>
       </div>
 
-      {/* Main Question Card */}
-      <div className="surface-card">
+      {/* Main Question Card (3D flip between items) */}
+      <AnimatePresence mode="wait">
+      <motion.div
+        key={currentItem.id}
+        className="surface-card"
+        initial={{ rotateY: -88, opacity: 0, scale: 0.94 }}
+        animate={{ rotateY: 0, opacity: 1, scale: 1 }}
+        exit={{ rotateY: 88, opacity: 0, scale: 0.94 }}
+        transition={{ type: 'spring', stiffness: 260, damping: 26 }}
+        style={{ transformPerspective: 1400, transformOrigin: 'center' }}
+      >
+        {!aiConnected && (itemType === 'cued_recall' || itemType === 'exam_application') && (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <AILock label="Keyword grading active. Connect AI for semantic rubric grading and adaptive hints" onConnect={onConnectAI} />
+          </div>
+        )}
+        {aiGrading && (
+          <div className="ai-msg assistant" style={{ marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <TypingDots /> AI is grading against the rubric...
+          </div>
+        )}
         {/* Card Metadata Header */}
         <div
           style={{
@@ -898,9 +984,10 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
                   }}
                 >
                   <span className="badge badge-familiar font-mono-tabular">R{i}</span>
-                  <span>{h.replace(/^R\d:\s*/i, '')}</span>
+                  <span>{aiHints[i] ? <><span className="ai-chip" style={{ marginRight: 6 }}>AI</span>{aiHints[i]}</> : h.replace(/^R\d:\s*/i, '')}</span>
                 </div>
               ))}
+              {hintLoading && <div className="telemetry-row"><TypingDots /></div>}
             </div>
           </div>
         )}
@@ -924,7 +1011,10 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
 
         {/* Verdict & Explanation Banner after Submit */}
         {submitted && (
-          <div
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.97 }}
+            animate={isCorrect ? { opacity: 1, y: 0, scale: [0.97, 1.02, 1] } : { opacity: 1, y: 0, scale: 1, x: [0, -8, 8, -5, 5, 0] }}
+            transition={{ type: 'spring', stiffness: 380, damping: 24 }}
             className="surface-elevated"
             style={{
               marginTop: '1.2rem',
@@ -952,6 +1042,21 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
             <p style={{ fontSize: '0.88rem', color: 'var(--text-primary)', marginTop: '0.5rem' }}>
               {verdictDetail}
             </p>
+
+            {aiGrade && (aiGrade.movesHit.length + aiGrade.movesMissed.length + aiGrade.trapsTriggered.length > 0) && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: '0.6rem' }}>
+                {aiGrade.movesHit.map((m, i) => (
+                  <motion.span key={`h${i}`} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.05 * i, type: 'spring' }} className="badge badge-success">✓ {m}</motion.span>
+                ))}
+                {aiGrade.movesMissed.map((m, i) => (
+                  <motion.span key={`m${i}`} initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.05 * (i + aiGrade.movesHit.length), type: 'spring' }} className="badge badge-danger">Missing: {m}</motion.span>
+                ))}
+                {aiGrade.trapsTriggered.map((m, i) => (
+                  <span key={`t${i}`} className="badge badge-warning">Trap: {m}</span>
+                ))}
+                {aiGrade.failureCategory && !isCorrect && <span className="ai-chip">{aiGrade.failureCategory.replace(/_/g, ' ')}</span>}
+              </div>
+            )}
 
             {/* Show Core Teaching Explanation & Formula if it was Priming or a Miss */}
             {(itemType === 'priming_predict' || !isCorrect || itemType === 'exam_application') && (
@@ -1007,9 +1112,10 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
                 <ArrowRight size={15} />
               </button>
             </div>
-          </div>
+          </motion.div>
         )}
-      </div>
+      </motion.div>
+      </AnimatePresence>
     </div>
   );
 };

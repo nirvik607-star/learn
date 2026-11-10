@@ -1,4 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { AITutorPanel } from './components/AITutorPanel';
+import { CelebrationBurst } from './components/CelebrationBurst';
+import { detectBridge } from './engine/aiClient';
 import {
   Gauge,
   Zap,
@@ -13,6 +17,10 @@ import {
   Compass,
   Bot,
   Sparkles,
+  PanelRightClose,
+  PanelRightOpen,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import type {
   CoursePack,
@@ -104,6 +112,12 @@ export function App() {
     'mistakes'
   );
   const [simulatedHoursOffset, setSimulatedHoursOffset] = useState<number>(0);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
+  const [studyContext, setStudyContext] = useState<string>('');
+  const [burstKey, setBurstKey] = useState<number | null>(null);
+  const [burstLabel, setBurstLabel] = useState<string>('');
+  const [openUnits, setOpenUnits] = useState<Record<string, boolean>>({});
 
   // Clean 0% Mastery Map (zero pre-filled answers!)
   const [masteryMap, setMasteryMap] = useState<Record<string, NodeMasteryState>>(
@@ -221,6 +235,7 @@ export function App() {
   };
 
   useEffect(() => {
+    detectBridge();
     fetchAIStatus();
   }, []);
 
@@ -336,6 +351,13 @@ export function App() {
           m.nodeId === params.nodeId ? { ...m, retestedAndCleared: true } : m
         )
       );
+    }
+
+    if (result.tierPromoted) {
+      const tierNames = ['Unseen', 'Familiar', 'Learned', 'Mastered'];
+      setBurstKey(Date.now());
+      setBurstLabel(`${params.nodeTitle} · Promoted to ${tierNames[result.newTier]}!`);
+      setTimeout(() => setBurstKey(null), 2800);
     }
 
     return {
@@ -697,212 +719,361 @@ export function App() {
             >
               {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
             </button>
+
+            <button
+              className={`btn btn-sm ${rightPanelOpen ? 'btn-primary' : ''}`}
+              onClick={() => setRightPanelOpen(!rightPanelOpen)}
+              title={rightPanelOpen ? 'Collapse AI Tutor Panel' : 'Expand AI Tutor Panel'}
+              style={{ padding: '6px 9px' }}
+            >
+              {rightPanelOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Main Content Container */}
-      <main className="main-container">
-        {activeTab === 'compiler_and_auth' ? (
-          <CourseCompilerAndAuthModal
-            course={currentCourse}
-            allCourses={courses}
-            aiStatus={aiStatus}
-            onRefreshAIStatus={fetchAIStatus}
-            onAddCompiledCourse={(newCourse) => {
-              setCourses((prev) => [newCourse, ...prev]);
-              setMasteryMap((prev) => {
-                const next = { ...prev };
-                newCourse.nodes.forEach((n) => {
-                  next[n.id] = createInitialNodeState(n.id);
-                });
-                return next;
-              });
-              setSelectedCourseId(newCourse.id);
-              setSelectedUnitId(null);
-              setActiveTab('command_center');
-            }}
-            onImportCourseJson={(imported) => {
-              setCourses((prev) => [
-                imported,
-                ...prev.filter((c) => c.id !== imported.id),
-              ]);
-              setMasteryMap((prev) => {
-                const next = { ...prev };
-                imported.nodes.forEach((n) => {
-                  next[n.id] = createInitialNodeState(n.id);
-                });
-                return next;
-              });
-              setSelectedCourseId(imported.id);
-              setSelectedUnitId(null);
-              setActiveTab('command_center');
-            }}
-            onLoadOptionalSampleCourse={handleLoadOptionalSampleCourse}
-            onClearAllCoursesAndReset={handleClearAllData}
-            onOpenSpotlightTutorial={() => {
-              setTutorialStepIndex(0);
-              setIsTutorialOpen(true);
-            }}
-          />
-        ) : !currentCourse || !readinessReport ? (
-          <div
-            className="card"
-            style={{
-              padding: '36px 24px',
-              textAlign: 'center',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '12px',
-            }}
-          >
-            <Bot size={36} style={{ color: 'var(--accent-primary)' }} />
-            <h2 className="serif-heading" style={{ fontSize: '1.4rem' }}>
-              No Study Set Loaded Yet
-            </h2>
-            <p style={{ maxWidth: '420px', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
-              Import your class materials in Setup or try a sample set to start.
-            </p>
-            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+      {/* Celebration burst for tier promotions */}
+      <CelebrationBurst burstKey={burstKey} label={burstLabel} />
+
+      {/* Obsidian 3-Column Workspace */}
+      <div className={`workspace ${rightPanelOpen ? '' : 'right-collapsed'}`}>
+        {/* Left Obsidian File Tree Sidebar */}
+        <aside className="ws-sidebar">
+          {currentCourse ? (
+            <>
+              <div className="tree-heading">{currentCourse.code} · {currentCourse.units.length} Units</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {currentCourse.units.map((u) => {
+                  const isOpen = openUnits[u.id] !== false; // open by default
+                  const uNodes = currentCourse.nodes.filter((n) => n.unitId === u.id);
+                  return (
+                    <div key={u.id} style={{ marginBottom: 4 }}>
+                      <button
+                        type="button"
+                        className="tree-item"
+                        style={{ fontWeight: 600, color: 'var(--text-primary)' }}
+                        onClick={() => setOpenUnits((prev) => ({ ...prev, [u.id]: !isOpen }))}
+                      >
+                        {isOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          Unit {u.number}: {u.title}
+                        </span>
+                      </button>
+                      {isOpen && (
+                        <div className="tree-children">
+                          {uNodes.map((n) => {
+                            const tier = masteryMap[n.id]?.tier || 0;
+                            const isSelected = (focusedNodeId || socraticNodeId || currentCourse.nodes[0]?.id) === n.id;
+                            const tierColors = ['var(--tier-0)', 'var(--tier-1)', 'var(--tier-2)', 'var(--tier-3)'];
+                            return (
+                              <button
+                                key={n.id}
+                                type="button"
+                                className={`tree-item ${isSelected ? 'active' : ''}`}
+                                onClick={() => {
+                                  setFocusedNodeId(n.id);
+                                  setSocraticNodeId(n.id);
+                                  if (activeTab === 'compiler_and_auth') setActiveTab('command_center');
+                                }}
+                                title={`${n.title} (Tier ${tier}/3)`}
+                              >
+                                <span className="tier-dot" style={{ background: tierColors[tier] }} />
+                                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {n.title}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="tree-heading" style={{ marginTop: 16 }}>Workspace Panes</div>
               <button
-                className="btn btn-primary"
+                type="button"
+                className={`tree-item ${activeTab === 'command_center' ? 'active' : ''}`}
+                onClick={() => setActiveTab('command_center')}
+              >
+                <Gauge size={13} /> Readiness Dashboard
+              </button>
+              <button
+                type="button"
+                className={`tree-item ${activeTab === 'quizlet_sprint' ? 'active' : ''}`}
+                onClick={() => setActiveTab('quizlet_sprint')}
+              >
+                <Zap size={13} /> Quizlet Learn Sprint
+              </button>
+              <button
+                type="button"
+                className={`tree-item ${activeTab === 'socratic_graph' ? 'active' : ''}`}
+                onClick={() => setActiveTab('socratic_graph')}
+              >
+                <Network size={13} /> Socratic Knowledge Graph
+              </button>
+              <button
+                type="button"
+                className={`tree-item ${activeTab === 'mistakes_and_cram' ? 'active' : ''}`}
+                onClick={() => { setMistakeSubTab('mistakes'); setActiveTab('mistakes_and_cram'); }}
+              >
+                <AlertTriangle size={13} /> Mistake Notebook ({openMistakesCount})
+              </button>
+              <button
+                type="button"
+                className={`tree-item ${activeTab === 'compiler_and_auth' ? 'active' : ''}`}
                 onClick={() => setActiveTab('compiler_and_auth')}
               >
-                Go to Setup
+                <Bot size={13} /> Class Harvester & Setup
               </button>
-              <button className="btn" onClick={handleLoadOptionalSampleCourse}>
-                <Sparkles size={14} /> Try Sample Set (0%)
-              </button>
+            </>
+          ) : (
+            <div style={{ padding: 12, fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+              No course loaded yet. Open Setup to harvest notes or load a sample set.
             </div>
-          </div>
-        ) : (
-          <>
-            {activeTab === 'command_center' && (
-              <ReadinessCommandCenter
-                course={currentCourse}
-                report={readinessReport}
-                masteryMap={masteryMap}
-                onStartQuizletSprint={(unitId, focusNodeId) => {
-                  if (unitId && unitId !== 'all') {
-                    setSelectedUnitId(unitId);
-                  } else {
+          )}
+        </aside>
+
+        {/* Center Main Stage (Animated page transitions) */}
+        <main className="ws-center">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ type: 'spring', stiffness: 360, damping: 28 }}
+            >
+              {activeTab === 'compiler_and_auth' ? (
+                <CourseCompilerAndAuthModal
+                  course={currentCourse}
+                  allCourses={courses}
+                  aiStatus={aiStatus}
+                  onRefreshAIStatus={fetchAIStatus}
+                  onAddCompiledCourse={(newCourse) => {
+                    setCourses((prev) => [newCourse, ...prev]);
+                    setMasteryMap((prev) => {
+                      const next = { ...prev };
+                      newCourse.nodes.forEach((n) => {
+                        next[n.id] = createInitialNodeState(n.id);
+                      });
+                      return next;
+                    });
+                    setSelectedCourseId(newCourse.id);
                     setSelectedUnitId(null);
-                  }
-                  setSprintFocusNodeId(focusNodeId || null);
-                  setActiveTab('quizlet_sprint');
-                }}
-                onOpenSocraticNode={(nodeId, startProbe) => {
-                  setSocraticNodeId(nodeId);
-                  setSocraticSubMode(
-                    startProbe ? 'diagnostic_probe' : 'graph_and_teach'
-                  );
-                  setActiveTab('socratic_graph');
-                }}
-                onOpenMistakeDrill={() => {
-                  setMistakeSubTab('mistakes');
-                  setActiveTab('mistakes_and_cram');
-                }}
-                onOpenCramSheet={() => {
-                  setMistakeSubTab('cram_sheet');
-                  setActiveTab('mistakes_and_cram');
-                }}
-                onFastForwardDecayDemo={() => {
-                  setSimulatedHoursOffset((prev) => (prev === 0 ? 48 : 0));
-                }}
-              />
-            )}
+                    setFocusedNodeId(newCourse.nodes[0]?.id || null);
+                    setActiveTab('command_center');
+                  }}
+                  onImportCourseJson={(imported) => {
+                    setCourses((prev) => [
+                      imported,
+                      ...prev.filter((c) => c.id !== imported.id),
+                    ]);
+                    setMasteryMap((prev) => {
+                      const next = { ...prev };
+                      imported.nodes.forEach((n) => {
+                        next[n.id] = createInitialNodeState(n.id);
+                      });
+                      return next;
+                    });
+                    setSelectedCourseId(imported.id);
+                    setSelectedUnitId(null);
+                    setFocusedNodeId(imported.nodes[0]?.id || null);
+                    setActiveTab('command_center');
+                  }}
+                  onLoadOptionalSampleCourse={handleLoadOptionalSampleCourse}
+                  onClearAllCoursesAndReset={handleClearAllData}
+                  onOpenSpotlightTutorial={() => {
+                    setTutorialStepIndex(0);
+                    setIsTutorialOpen(true);
+                  }}
+                />
+              ) : !currentCourse || !readinessReport ? (
+                <div
+                  className="card"
+                  style={{
+                    padding: '36px 24px',
+                    textAlign: 'center',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    gap: '12px',
+                  }}
+                >
+                  <Bot size={36} style={{ color: 'var(--accent-primary)' }} />
+                  <h2 className="serif-heading" style={{ fontSize: '1.4rem' }}>
+                    No Study Set Loaded Yet
+                  </h2>
+                  <p style={{ maxWidth: '420px', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
+                    Import your class materials in Setup or try a sample set to start.
+                  </p>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => setActiveTab('compiler_and_auth')}
+                    >
+                      Go to Setup
+                    </button>
+                    <button className="btn" onClick={handleLoadOptionalSampleCourse}>
+                      <Sparkles size={14} /> Try Sample Set (0%)
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {activeTab === 'command_center' && (
+                    <ReadinessCommandCenter
+                      course={currentCourse}
+                      report={readinessReport}
+                      masteryMap={masteryMap}
+                      onStartQuizletSprint={(unitId, focusNodeId) => {
+                        if (unitId && unitId !== 'all') {
+                          setSelectedUnitId(unitId);
+                        } else {
+                          setSelectedUnitId(null);
+                        }
+                        setSprintFocusNodeId(focusNodeId || null);
+                        setFocusedNodeId(focusNodeId || null);
+                        setActiveTab('quizlet_sprint');
+                      }}
+                      onOpenSocraticNode={(nodeId, startProbe) => {
+                        setSocraticNodeId(nodeId);
+                        setFocusedNodeId(nodeId);
+                        setSocraticSubMode(
+                          startProbe ? 'diagnostic_probe' : 'graph_and_teach'
+                        );
+                        setActiveTab('socratic_graph');
+                      }}
+                      onOpenMistakeDrill={() => {
+                        setMistakeSubTab('mistakes');
+                        setActiveTab('mistakes_and_cram');
+                      }}
+                      onOpenCramSheet={() => {
+                        setMistakeSubTab('cram_sheet');
+                        setActiveTab('mistakes_and_cram');
+                      }}
+                      onFastForwardDecayDemo={() => {
+                        setSimulatedHoursOffset((prev) => (prev === 0 ? 48 : 0));
+                      }}
+                    />
+                  )}
 
-            {activeTab === 'quizlet_sprint' && (
-              <QuizletLearnSprint
-                course={currentCourse}
-                report={readinessReport}
-                masteryMap={masteryMap}
-                mistakes={mistakes}
-                initialUnitFilter={selectedUnitId || 'all'}
-                focusNodeId={sprintFocusNodeId}
-                onRecordAttempt={handleRecordSprintAttempt}
-                onBackToDashboard={() => setActiveTab('command_center')}
-                onLocalZeroTokenTick={() => {
-                  setAiStatus((prev) => ({
-                    ...prev,
-                    tokenStats: {
-                      ...prev.tokenStats,
-                      localZeroTokenActions:
-                        prev.tokenStats.localZeroTokenActions + 1,
-                      estimatedTokensSaved:
-                        prev.tokenStats.estimatedTokensSaved + 850,
-                    },
-                  }));
-                }}
-              />
-            )}
+                  {activeTab === 'quizlet_sprint' && (
+                    <QuizletLearnSprint
+                      course={currentCourse}
+                      report={readinessReport}
+                      masteryMap={masteryMap}
+                      mistakes={mistakes}
+                      initialUnitFilter={selectedUnitId || 'all'}
+                      focusNodeId={sprintFocusNodeId}
+                      onRecordAttempt={handleRecordSprintAttempt}
+                      onBackToDashboard={() => setActiveTab('command_center')}
+                      onStudyContext={(nodeId, ctx) => {
+                        setFocusedNodeId(nodeId);
+                        setStudyContext(ctx);
+                      }}
+                      onConnectAI={() => setActiveTab('compiler_and_auth')}
+                      onLocalZeroTokenTick={() => {
+                        setAiStatus((prev) => ({
+                          ...prev,
+                          tokenStats: {
+                            ...prev.tokenStats,
+                            localZeroTokenActions:
+                              prev.tokenStats.localZeroTokenActions + 1,
+                            estimatedTokensSaved:
+                              prev.tokenStats.estimatedTokensSaved + 850,
+                          },
+                        }));
+                      }}
+                    />
+                  )}
 
-            {activeTab === 'socratic_graph' && (
-              <SocraticGraphView
-                course={currentCourse}
-                masteryMap={masteryMap}
-                selectedUnitId={selectedUnitId}
-                initialNodeId={socraticNodeId}
-                initialSubMode={socraticSubMode}
-                onSelectUnit={(u) => setSelectedUnitId(u)}
-                onFastTrackNode={handleFastTrackNode}
-                onPracticeSingleNode={(nodeId) => {
-                  setSprintFocusNodeId(nodeId);
-                  setActiveTab('quizlet_sprint');
-                }}
-              />
-            )}
+                  {activeTab === 'socratic_graph' && (
+                    <SocraticGraphView
+                      course={currentCourse}
+                      masteryMap={masteryMap}
+                      selectedUnitId={selectedUnitId}
+                      initialNodeId={socraticNodeId || focusedNodeId}
+                      initialSubMode={socraticSubMode}
+                      onSelectUnit={(u) => setSelectedUnitId(u)}
+                      onFastTrackNode={handleFastTrackNode}
+                      onFocusNode={(nodeId) => setFocusedNodeId(nodeId)}
+                      onConnectAI={() => setActiveTab('compiler_and_auth')}
+                      onPracticeSingleNode={(nodeId) => {
+                        setSprintFocusNodeId(nodeId);
+                        setFocusedNodeId(nodeId);
+                        setActiveTab('quizlet_sprint');
+                      }}
+                    />
+                  )}
 
-            {activeTab === 'mistakes_and_cram' && (
-              <MistakeNotebookAndCram
-                course={currentCourse}
-                mistakes={mistakes}
-                readiness={readinessReport}
-                initialTab={mistakeSubTab}
-                onStartMistakeDrill={() => {
-                  setSprintFocusNodeId(null);
-                  setActiveTab('quizlet_sprint');
-                }}
-                onResolveMistake={(mistakeId) =>
-                  setMistakes((prev) =>
-                    prev.map((m) =>
-                      m.id === mistakeId ? { ...m, retestedAndCleared: true } : m
-                    )
-                  )
-                }
-                onAddManualMistake={(
-                  nodeId,
-                  questionPrompt,
-                  learnerAnswer,
-                  failureType
-                ) => {
-                  const node = currentCourse.nodes.find((n) => n.id === nodeId);
-                  if (!node) return;
-                  const newMistake: MistakeRecord = {
-                    id: `manual-${Date.now()}`,
-                    courseId: currentCourse.id,
-                    unitId: node.unitId,
-                    nodeId: node.id,
-                    nodeTitle: node.title,
-                    timestamp: Date.now(),
-                    stage: 'application',
-                    failureCategory: failureType,
-                    question: questionPrompt,
-                    learnerAnswer,
-                    learnerThinking: '',
-                    confidence: 75,
-                    correctTarget: node.statement,
-                    surgicalRepair: node.statement,
-                    retestedAndCleared: false,
-                  };
-                  setMistakes((prev) => [newMistake, ...prev]);
-                }}
-              />
-            )}
-          </>
-        )}
-      </main>
+                  {activeTab === 'mistakes_and_cram' && (
+                    <MistakeNotebookAndCram
+                      course={currentCourse}
+                      mistakes={mistakes}
+                      readiness={readinessReport}
+                      initialTab={mistakeSubTab}
+                      onStartMistakeDrill={() => {
+                        setSprintFocusNodeId(null);
+                        setActiveTab('quizlet_sprint');
+                      }}
+                      onConnectAI={() => setActiveTab('compiler_and_auth')}
+                      onResolveMistake={(mistakeId) =>
+                        setMistakes((prev) =>
+                          prev.map((m) =>
+                            m.id === mistakeId ? { ...m, retestedAndCleared: true } : m
+                          )
+                        )
+                      }
+                      onAddManualMistake={(
+                        nodeId,
+                        questionPrompt,
+                        learnerAnswer,
+                        failureType
+                      ) => {
+                        const node = currentCourse.nodes.find((n) => n.id === nodeId);
+                        if (!node) return;
+                        const newMistake: MistakeRecord = {
+                          id: `manual-${Date.now()}`,
+                          courseId: currentCourse.id,
+                          unitId: node.unitId,
+                          nodeId: node.id,
+                          nodeTitle: node.title,
+                          timestamp: Date.now(),
+                          stage: 'application',
+                          failureCategory: failureType,
+                          question: questionPrompt,
+                          learnerAnswer,
+                          learnerThinking: '',
+                          confidence: 75,
+                          correctTarget: node.statement,
+                          surgicalRepair: node.statement,
+                          retestedAndCleared: false,
+                        };
+                        setMistakes((prev) => [newMistake, ...prev]);
+                      }}
+                    />
+                  )}
+                </>
+              )}
+            </motion.div>
+          </AnimatePresence>
+        </main>
+
+        {/* Right Obsidian Panel: Persistent Multi-Turn AI Socratic Tutor */}
+        <aside className="ws-right">
+          <AITutorPanel
+            node={
+              currentCourse
+                ? currentCourse.nodes.find((n) => n.id === (focusedNodeId || socraticNodeId)) || currentCourse.nodes[0]
+                : null
+            }
+            studyContext={studyContext}
+            onConnect={() => setActiveTab('compiler_and_auth')}
+          />
+        </aside>
+      </div>
     </div>
   );
 }

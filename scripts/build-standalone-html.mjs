@@ -161,6 +161,20 @@ const standaloneHtml = `<!doctype html>
             });
           }
 
+          if (url.includes('/api/ai/chat') && init && init.body) {
+            const tok = getStoredOpenAIToken();
+            if (tok && tok.length > 12) {
+              try {
+                return await originalFetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok },
+                  body: init.body,
+                });
+              } catch (e) {}
+            }
+            return new Response(JSON.stringify({ ok: false, error: 'No AI key' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+          }
+
           if (url.includes('/api/ai/tutor') && init && init.body) {
             try {
               const body = JSON.parse(init.body);

@@ -697,6 +697,50 @@ export function apexLearnAiBridgePlugin(): Plugin {
           return;
         }
 
+        if (urlObj.pathname === '/api/ai/chat' && req.method === 'POST') {
+          const body = await readJsonBody(req);
+          const msgs = (Array.isArray(body.messages) ? body.messages : []) as Array<{ role: string; content: string }>;
+          const systemPrompt = msgs.filter((m) => m.role === 'system').map((m) => m.content).join('\n\n');
+          const userPrompt = msgs
+            .filter((m) => m.role !== 'system')
+            .map((m) => (m.role === 'assistant' ? `Tutor: ${m.content}` : `Learner: ${m.content}`))
+            .join('\n');
+          let reply = '';
+          try {
+            if (await detectCliVersion('codex')) {
+              reply = await runCodexCliPrompt(systemPrompt, userPrompt);
+            } else if (await detectCliVersion('claude')) {
+              reply = await runClaudeCliPrompt(systemPrompt, userPrompt);
+            } else if (stored.chatgptOAuth?.accessToken || stored.openaiApiKey || process.env.OPENAI_API_KEY) {
+              reply = await callOpenAICompatible({
+                endpoint: 'https://api.openai.com/v1',
+                apiKeyOrBearer: (stored.chatgptOAuth?.accessToken || stored.openaiApiKey || process.env.OPENAI_API_KEY)!,
+                model: 'gpt-4o-mini',
+                systemPrompt,
+                userPrompt,
+              });
+            } else if (stored.anthropicApiKey || process.env.ANTHROPIC_API_KEY) {
+              reply = await callAnthropicMessages({
+                apiKey: (stored.anthropicApiKey || process.env.ANTHROPIC_API_KEY)!,
+                model: 'claude-3-5-haiku-latest',
+                systemPrompt,
+                userPrompt,
+              });
+            }
+          } catch {
+            reply = '';
+          }
+          if (!reply) {
+            res.statusCode = 503;
+            res.end(JSON.stringify({ ok: false, error: 'No AI provider available' }));
+            return;
+          }
+          stats.aiAssistedActions += 1;
+          saveStoredConfig({ ...stored, tokenStats: stats });
+          res.end(JSON.stringify({ ok: true, reply }));
+          return;
+        }
+
         if (urlObj.pathname === '/api/ai/tutor' && req.method === 'POST') {
           const body = await readJsonBody(req);
           const mode = String(body.mode || 'socratic_nudge');
