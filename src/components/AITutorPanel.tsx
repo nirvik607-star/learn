@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Bot, Lock, Send, ShieldAlert, Sparkles, RotateCcw } from 'lucide-react';
 import type { PropositionNode } from '../types/harness';
-import { isAIConnected, socraticTurn, type ChatMessage } from '../engine/aiClient';
+import { isAIConnected, getActiveAIProvider, socraticTurn, type ChatMessage } from '../engine/aiClient';
 
 export function useAIConnected(): boolean {
   const [connected, setConnected] = useState(isAIConnected());
@@ -42,6 +42,7 @@ interface AITutorPanelProps {
 /** Persistent Obsidian-style right pane: multi-turn Socratic tutor anchored to the focused node. */
 export const AITutorPanel: React.FC<AITutorPanelProps> = ({ node, studyContext = '', onConnect }) => {
   const connected = useAIConnected();
+  const activeProvider = getActiveAIProvider();
   const [persona, setPersona] = useState<'socratic' | 'strict_examiner'>('socratic');
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -94,7 +95,18 @@ export const AITutorPanel: React.FC<AITutorPanelProps> = ({ node, studyContext =
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
           <Bot size={15} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>AI Tutor</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: '0.8rem', fontWeight: 600 }}>AI Tutor</span>
+              {activeProvider ? (
+                <span className="badge badge-success" style={{ fontSize: '0.62rem', padding: '1px 6px' }}>
+                  {activeProvider.name}
+                </span>
+              ) : (
+                <span className="badge" style={{ fontSize: '0.62rem', padding: '1px 6px' }}>
+                  0-Token
+                </span>
+              )}
+            </div>
             <div className="mono" style={{ fontSize: '0.64rem', color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {node ? node.title : 'Select a concept'}
             </div>

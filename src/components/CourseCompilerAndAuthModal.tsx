@@ -20,7 +20,7 @@ import {
   maskKey,
 } from '../core/auth-keys';
 import { compileNotesToCoursePackLocally } from '../engine/courseCompiler';
-import { compileCourseWithAI } from '../engine/aiClient';
+import { compileCourseWithAI, getActiveAIProvider, notifyAIStatusChanged } from '../engine/aiClient';
 import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
 
 // Borrowed directly from amosblomqvist/learnharness components/settings/chatgpt-connection.tsx & subscription-connections.tsx
@@ -133,6 +133,7 @@ interface CourseCompilerAndAuthModalProps {
   onLoadOptionalSampleCourse: () => void;
   onClearAllCoursesAndReset: () => void;
   onOpenSpotlightTutorial: () => void;
+  onDeleteCourse?: (courseId: string) => void;
 }
 
 function buildCompactAgentPrompt(courseCode: string, examName: string): string {
@@ -224,7 +225,9 @@ export const CourseCompilerAndAuthModal: React.FC<
   onLoadOptionalSampleCourse,
   onClearAllCoursesAndReset,
   onOpenSpotlightTutorial,
+  onDeleteCourse,
 }) => {
+  const activeAI = getActiveAIProvider();
   const [courseCode, setCourseCode] = useState('');
   const [examName, setExamName] = useState('');
   const [copiedPrompt, setCopiedPrompt] = useState(false);
@@ -380,6 +383,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     } catch {
       // ignore
     }
+    notifyAIStatusChanged();
 
     if (serverBaseUrl !== null) {
       try {
@@ -415,6 +419,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     } catch {
       // ignore
     }
+    notifyAIStatusChanged();
     if (serverBaseUrl !== null) {
       try {
         await fetch(`${serverBaseUrl}/api/keys/${encodeURIComponent(envVar)}`, {
@@ -754,6 +759,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     } catch {
       // ignore
     }
+    notifyAIStatusChanged();
 
     setNativeStatuses((prev) =>
       prev.map((s) =>
@@ -1241,7 +1247,7 @@ export const CourseCompilerAndAuthModal: React.FC<
                 disabled={compilingAI}
                 onClick={handleCompileDirectlyWithAI}
               >
-                <Sparkles size={14} /> {compilingAI ? 'AI Compiling Full Course Pack...' : 'Compile Directly with Connected AI'}
+                <Sparkles size={14} /> {compilingAI ? 'AI Compiling Full Course Pack...' : `Compile Directly with ${activeAI?.name || 'Connected AI'}`}
               </button>
             ) : (
               <AILock label="Connect AI to compile notes directly in-app" />
@@ -1279,6 +1285,43 @@ export const CourseCompilerAndAuthModal: React.FC<
                 </button>
               )}
             </div>
+
+            {allCourses.length > 0 && (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div className="mono" style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                  Loaded Study Sets ({allCourses.length})
+                </div>
+                {allCourses.map((c) => (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '5px 8px',
+                      borderRadius: '4px',
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '0.78rem',
+                      gap: '8px',
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {c.title}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      onClick={() => onDeleteCourse?.(c.id)}
+                      title={`Delete study set "${c.title}"`}
+                      style={{ padding: '2px 6px', fontSize: '0.7rem', color: 'var(--danger)', flexShrink: 0 }}
+                    >
+                      <Trash2 size={11} /> Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </form>
 

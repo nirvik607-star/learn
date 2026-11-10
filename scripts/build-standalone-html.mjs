@@ -162,6 +162,25 @@ const standaloneHtml = `<!doctype html>
           }
 
           if (url.includes('/api/ai/chat') && init && init.body) {
+            const xaiKey = getStoredKey('lh_xai_key') || getStoredKey('lh_xai_account_token');
+            if (xaiKey && xaiKey.length > 5) {
+              try {
+                const parsedBody = JSON.parse(init.body);
+                parsedBody.model = parsedBody.model || 'grok-beta';
+                const xRes = await originalFetch('https://api.x.ai/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + xaiKey },
+                  body: JSON.stringify(parsedBody),
+                });
+                if (xRes.ok) {
+                  const data = await xRes.json();
+                  const reply = data.choices?.[0]?.message?.content;
+                  if (reply) {
+                    return new Response(JSON.stringify({ ok: true, reply }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                  }
+                }
+              } catch (e) {}
+            }
             const tok = getStoredOpenAIToken();
             if (tok && tok.length > 12) {
               try {

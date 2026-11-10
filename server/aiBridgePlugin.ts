@@ -726,6 +726,14 @@ export function apexLearnAiBridgePlugin(): Plugin {
                 systemPrompt,
                 userPrompt,
               });
+            } else if (loadKeysMap().XAI_API_KEY || process.env.XAI_API_KEY) {
+              reply = await callOpenAICompatible({
+                endpoint: 'https://api.x.ai/v1',
+                apiKeyOrBearer: (loadKeysMap().XAI_API_KEY || process.env.XAI_API_KEY)!,
+                model: 'grok-beta',
+                systemPrompt,
+                userPrompt,
+              });
             }
           } catch {
             reply = '';

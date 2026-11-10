@@ -5,22 +5,147 @@ export interface ChatMessage {
   content: string;
 }
 
-const TOKEN_KEY = 'lh_openai_account_token';
-
-export function getAIToken(): string {
-  try {
-    const raw = (localStorage.getItem(TOKEN_KEY) || '').trim();
-    if (raw.startsWith('{')) {
-      const p = JSON.parse(raw);
-      return p.access_token || p.token || p.OPENAI_API_KEY || '';
-    }
-    return raw;
-  } catch {
-    return '';
-  }
+export interface ActiveAIProvider {
+  id: 'xai' | 'openai' | 'anthropic' | 'openrouter' | 'google' | 'bridge';
+  name: string;
+  token?: string;
+  endpoint?: string;
+  model?: string;
 }
 
 let bridgeReady = false;
+let bridgeProviderName = '';
+
+export function getActiveAIProvider(): ActiveAIProvider | null {
+  try {
+    // 1. Direct xAI key (Grok / SuperGrok)
+    const directXai = (localStorage.getItem('lh_xai_key') || '').trim();
+    if (directXai.length > 8) {
+      return {
+        id: 'xai',
+        name: 'Grok (xAI)',
+        token: directXai,
+        endpoint: 'https://api.x.ai/v1/chat/completions',
+        model: 'grok-beta',
+      };
+    }
+
+    // 2. Parsed lh_auth_keys_v1 catalog
+    const authKeysRaw = localStorage.getItem('lh_auth_keys_v1');
+    if (authKeysRaw) {
+      try {
+        const keys = JSON.parse(authKeysRaw) as Record<string, string>;
+        if (keys.XAI_API_KEY && keys.XAI_API_KEY.trim().length > 8) {
+          return {
+            id: 'xai',
+            name: 'Grok (xAI)',
+            token: keys.XAI_API_KEY.trim(),
+            endpoint: 'https://api.x.ai/v1/chat/completions',
+            model: 'grok-beta',
+          };
+        }
+        if (keys.OPENAI_API_KEY && keys.OPENAI_API_KEY.trim().length > 8) {
+          return {
+            id: 'openai',
+            name: 'ChatGPT (OpenAI)',
+            token: keys.OPENAI_API_KEY.trim(),
+            endpoint: 'https://api.openai.com/v1/chat/completions',
+            model: 'gpt-4o-mini',
+          };
+        }
+        if (keys.OPENROUTER_API_KEY && keys.OPENROUTER_API_KEY.trim().length > 8) {
+          return {
+            id: 'openrouter',
+            name: 'OpenRouter',
+            token: keys.OPENROUTER_API_KEY.trim(),
+            endpoint: 'https://openrouter.ai/api/v1/chat/completions',
+            model: 'openai/gpt-4o-mini',
+          };
+        }
+        if (keys.ANTHROPIC_API_KEY && keys.ANTHROPIC_API_KEY.trim().length > 8) {
+          return {
+            id: 'anthropic',
+            name: 'Claude (Anthropic)',
+            token: keys.ANTHROPIC_API_KEY.trim(),
+          };
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 3. OpenAI account token (OAuth or sk-...)
+    const rawOai = (localStorage.getItem('lh_openai_account_token') || '').trim();
+    let oaiToken = rawOai;
+    if (rawOai.startsWith('{')) {
+      try {
+        const p = JSON.parse(rawOai);
+        oaiToken = p.access_token || p.token || p.OPENAI_API_KEY || '';
+      } catch {
+        oaiToken = '';
+      }
+    }
+    if (oaiToken.length > 8) {
+      return {
+        id: 'openai',
+        name: 'ChatGPT (OpenAI)',
+        token: oaiToken,
+        endpoint: 'https://api.openai.com/v1/chat/completions',
+        model: 'gpt-4o-mini',
+      };
+    }
+
+    // 4. Anthropic direct key
+    const directAnthropic = (localStorage.getItem('lh_anthropic_key') || '').trim();
+    if (directAnthropic.length > 8) {
+      return {
+        id: 'anthropic',
+        name: 'Claude (Anthropic)',
+        token: directAnthropic,
+      };
+    }
+
+    // 5. Native subscriptions check
+    const subsRaw = localStorage.getItem('lh_native_subscriptions_v1');
+    if (subsRaw) {
+      try {
+        const subs = JSON.parse(subsRaw);
+        if (Array.isArray(subs)) {
+          const grokSub = subs.find(
+            (s: { providerId: string; state: string }) =>
+              s.providerId === 'xai' && s.state === 'connected'
+          );
+          if (grokSub) {
+            return {
+              id: 'xai',
+              name: 'SuperGrok (Subscription)',
+              model: 'grok-beta',
+            };
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    // 6. Local Mac CLI Bridge
+    if (bridgeReady) {
+      return {
+        id: 'bridge',
+        name: bridgeProviderName || 'Local CLI Bridge (Codex / Claude)',
+      };
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+export function getAIToken(): string {
+  const active = getActiveAIProvider();
+  return active?.token || '';
+}
 
 /** Probes the local bridge once; called on app start. */
 export async function detectBridge(): Promise<boolean> {
@@ -28,9 +153,19 @@ export async function detectBridge(): Promise<boolean> {
     const res = await fetch('/api/ai/status', { signal: AbortSignal.timeout(1500) });
     if (res.ok) {
       const s = await res.json();
-      bridgeReady = Boolean(
-        s.codexCliAvailable || s.claudeCliAvailable || s.chatgptOAuthConnected || s.openaiKeyConfigured || s.anthropicKeyConfigured
-      ) && !('standalone' in s);
+      bridgeReady =
+        Boolean(
+          s.codexCliAvailable ||
+            s.claudeCliAvailable ||
+            s.chatgptOAuthConnected ||
+            s.openaiKeyConfigured ||
+            s.anthropicKeyConfigured ||
+            s.activeProvider === 'xai'
+        ) && !('standalone' in s);
+      if (s.codexCliAvailable) bridgeProviderName = 'Codex CLI';
+      else if (s.claudeCliAvailable) bridgeProviderName = 'Claude Code CLI';
+      else if (s.chatgptOAuthConnected) bridgeProviderName = 'ChatGPT OAuth';
+      else if (s.activeProvider === 'xai') bridgeProviderName = 'Grok (xAI)';
     }
   } catch {
     bridgeReady = false;
@@ -40,36 +175,45 @@ export async function detectBridge(): Promise<boolean> {
 }
 
 export function isAIConnected(): boolean {
-  return getAIToken().length > 20 || bridgeReady;
+  return getActiveAIProvider() !== null;
 }
 
-/** Fires when the stored key changes so every AI surface re-renders its lock state. */
+/** Fires when any stored key changes so every AI surface re-renders its lock state in real-time. */
 export function notifyAIStatusChanged() {
   window.dispatchEvent(new Event('lh-ai-status'));
 }
 
 /**
- * Single entry point for every AI feature.
- * Order: browser OpenAI key -> local Mac bridge (/api/ai/chat) -> null (caller uses 0-token fallback).
+ * Universal multi-provider AI chat dispatcher.
+ * Routes to:
+ * 1. xAI Grok (direct API call with 'grok-beta' / 'grok-2-latest')
+ * 2. OpenAI ChatGPT ('gpt-4o-mini')
+ * 3. OpenRouter
+ * 4. Local Mac Bridge (/api/ai/chat for Codex CLI / Claude CLI / Anthropic)
+ * Returns null if all fail so caller uses 0-token local doctrine engine.
  */
 export async function aiChat(
   messages: ChatMessage[],
   opts: { json?: boolean; maxTokens?: number; temperature?: number } = {}
 ): Promise<string | null> {
-  const token = getAIToken();
-  const body = {
-    model: 'gpt-4o-mini',
-    messages,
-    max_tokens: opts.maxTokens ?? 400,
-    temperature: opts.temperature ?? 0.4,
-    ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
-  };
+  const active = getActiveAIProvider();
 
-  if (token.length > 20) {
+  // 1. xAI / Grok Direct Call
+  if (active?.id === 'xai' && active.token) {
     try {
-      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      const body = {
+        model: active.model || 'grok-beta',
+        messages,
+        max_tokens: opts.maxTokens ?? 420,
+        temperature: opts.temperature ?? 0.35,
+        ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
+      };
+      const res = await fetch('https://api.x.ai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${active.token}`,
+        },
         body: JSON.stringify(body),
       });
       if (res.ok) {
@@ -78,15 +222,76 @@ export async function aiChat(
         if (text) return text;
       }
     } catch {
-      // fall through to bridge
+      // Fall through to bridge if browser CORS or proxy issues occur
     }
   }
 
+  // 2. OpenAI Direct Call
+  if (active?.id === 'openai' && active.token) {
+    try {
+      const body = {
+        model: active.model || 'gpt-4o-mini',
+        messages,
+        max_tokens: opts.maxTokens ?? 400,
+        temperature: opts.temperature ?? 0.4,
+        ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
+      };
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${active.token}`,
+        },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content?.trim();
+        if (text) return text;
+      }
+    } catch {
+      // Fall through to bridge
+    }
+  }
+
+  // 3. OpenRouter Direct Call
+  if (active?.id === 'openrouter' && active.token) {
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${active.token}`,
+        },
+        body: JSON.stringify({
+          model: active.model || 'openai/gpt-4o-mini',
+          messages,
+          max_tokens: opts.maxTokens ?? 400,
+          temperature: opts.temperature ?? 0.4,
+          ...(opts.json ? { response_format: { type: 'json_object' } } : {}),
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.choices?.[0]?.message?.content?.trim();
+        if (text) return text;
+      }
+    } catch {
+      // Fall through to bridge
+    }
+  }
+
+  // 4. Local Bridge (/api/ai/chat) — handles Codex CLI, Claude CLI, Anthropic, or server-side xAI
   try {
     const res = await fetch('/api/ai/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        messages,
+        max_tokens: opts.maxTokens ?? 400,
+        temperature: opts.temperature ?? 0.4,
+        json: opts.json,
+      }),
       signal: AbortSignal.timeout(25000),
     });
     if (res.ok) {
@@ -95,8 +300,9 @@ export async function aiChat(
       if (text) return text;
     }
   } catch {
-    // no bridge
+    // No bridge
   }
+
   return null;
 }
 
@@ -140,7 +346,12 @@ export async function socraticTurn(
       : 'You are a warm but rigorous Socratic tutor.';
   return aiChat(
     [
-      { role: 'system', content: `${role}\n${PEDAGOGY}\n\n${nodeContext(node)}${extraContext ? `\n\nCurrent context:\n${extraContext}` : ''}` },
+      {
+        role: 'system',
+        content: `${role}\n${PEDAGOGY}\n\n${nodeContext(node)}${
+          extraContext ? `\n\nCurrent context:\n${extraContext}` : ''
+        }`,
+      },
       ...history,
     ],
     { maxTokens: 260 }
@@ -218,9 +429,16 @@ export async function adaptiveHint(
     [
       {
         role: 'system',
-        content: `Write exactly one hint at rung ${rungDefs[Math.min(5, Math.max(0, rung))]}. Target the specific gap in the learner's attempt. Do not go beyond this rung. At most 40 words. No preamble.`,
+        content: `Write exactly one hint at rung ${
+          rungDefs[Math.min(5, Math.max(0, rung))]
+        }. Target the specific gap in the learner's attempt. Do not go beyond this rung. At most 40 words. No preamble.`,
       },
-      { role: 'user', content: `${nodeContext(node)}\nQuestion: ${question}\nLearner's attempt so far: ${attempt || '(blank)'}` },
+      {
+        role: 'user',
+        content: `${nodeContext(node)}\nQuestion: ${question}\nLearner's attempt so far: ${
+          attempt || '(blank)'
+        }`,
+      },
     ],
     { maxTokens: 120, temperature: 0.3 }
   );
@@ -244,7 +462,10 @@ export async function generateVariant(
         role: 'system',
         content: `Write ONE new exam question that tests the same proposition in a fresh surface (new scenario and wording) and specifically targets this failure type: ${failureCategory}. Return JSON only: {"question":"...","answer":"concise model answer"}`,
       },
-      { role: 'user', content: `${nodeContext(node)}\nOriginal question: ${originalQuestion}\nLearner's wrong answer: ${wrongAnswer}` },
+      {
+        role: 'user',
+        content: `${nodeContext(node)}\nOriginal question: ${originalQuestion}\nLearner's wrong answer: ${wrongAnswer}`,
+      },
     ],
     { json: true, maxTokens: 300, temperature: 0.7 }
   );
@@ -260,8 +481,14 @@ export async function compileCourseWithAI(
 ): Promise<CoursePack | null> {
   const text = await aiChat(
     [
-      { role: 'system', content: `You compile study material into a LearnHarness course pack. ${schemaPrompt}\nReturn JSON only.` },
-      { role: 'user', content: `Course: ${code}\nExam: ${examTitle}\n\nMaterial:\n${rawNotes.slice(0, 24000)}` },
+      {
+        role: 'system',
+        content: `You compile study material into a LearnHarness course pack. ${schemaPrompt}\nReturn JSON only.`,
+      },
+      {
+        role: 'user',
+        content: `Course: ${code}\nExam: ${examTitle}\n\nMaterial:\n${rawNotes.slice(0, 24000)}`,
+      },
     ],
     { json: true, maxTokens: 6000, temperature: 0.3 }
   );

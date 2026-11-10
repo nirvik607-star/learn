@@ -21,6 +21,7 @@ import {
   PanelRightOpen,
   ChevronDown,
   ChevronRight,
+  Trash2,
 } from 'lucide-react';
 import type {
   CoursePack,
@@ -399,6 +400,39 @@ export function App() {
     setActiveTab('command_center');
   };
 
+  const handleDeleteCourse = (courseId: string) => {
+    const target = courses.find((c) => c.id === courseId);
+    const name = target?.title || target?.code || 'this study set';
+    if (
+      !window.confirm(
+        `Are you sure you want to delete the study set "${name}"?\n\nThis will remove all its units, concepts, and progress.`
+      )
+    ) {
+      return;
+    }
+    const nextCourses = courses.filter((c) => c.id !== courseId);
+    setCourses(nextCourses);
+    if (target) {
+      const nodeIds = new Set(target.nodes.map((n) => n.id));
+      setMasteryMap((prev) => {
+        const next = { ...prev };
+        Object.keys(next).forEach((id) => {
+          if (nodeIds.has(id)) delete next[id];
+        });
+        return next;
+      });
+      setMistakes((prev) => prev.filter((m) => m.courseId !== courseId));
+    }
+    const nextSelected = nextCourses[0]?.id || '';
+    setSelectedCourseId(nextSelected);
+    setSelectedUnitId(null);
+    setSprintFocusNodeId(null);
+    setFocusedNodeId(nextCourses[0]?.nodes[0]?.id || null);
+    if (nextCourses.length === 0) {
+      setActiveTab('compiler_and_auth');
+    }
+  };
+
   const handleClearAllData = () => {
     setCourses([]);
     setMasteryMap({});
@@ -515,28 +549,40 @@ export function App() {
             </div>
 
             {courses.length > 0 && currentCourse && (
-              <select
-                className="input"
-                style={{
-                  width: 'auto',
-                  maxWidth: '280px',
-                  padding: '6px 10px',
-                  fontSize: '0.82rem',
-                  fontWeight: 600,
-                }}
-                value={currentCourse.id}
-                onChange={(e) => {
-                  setSelectedCourseId(e.target.value);
-                  setSelectedUnitId(null);
-                  setSprintFocusNodeId(null);
-                }}
-              >
-                {courses.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-              </select>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <select
+                  className="input"
+                  style={{
+                    width: 'auto',
+                    maxWidth: '260px',
+                    padding: '6px 10px',
+                    fontSize: '0.82rem',
+                    fontWeight: 600,
+                  }}
+                  value={currentCourse.id}
+                  onChange={(e) => {
+                    setSelectedCourseId(e.target.value);
+                    setSelectedUnitId(null);
+                    setSprintFocusNodeId(null);
+                  }}
+                >
+                  {courses.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.title}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ padding: '6px 8px', color: 'var(--danger)' }}
+                  onClick={() => handleDeleteCourse(currentCourse.id)}
+                  title={`Delete study set "${currentCourse.title}"`}
+                  aria-label="Delete this study set"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             )}
           </div>
 
@@ -741,7 +787,18 @@ export function App() {
         <aside className="ws-sidebar">
           {currentCourse ? (
             <>
-              <div className="tree-heading">{currentCourse.code} · {currentCourse.units.length} Units</div>
+              <div className="tree-heading" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>{currentCourse.code} · {currentCourse.units.length} Units</span>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  style={{ padding: '2px 5px', fontSize: '0.65rem', color: 'var(--danger)', border: 'none', background: 'transparent', cursor: 'pointer' }}
+                  onClick={() => handleDeleteCourse(currentCourse.id)}
+                  title={`Delete study set "${currentCourse.title}"`}
+                >
+                  <Trash2 size={10} /> Delete Set
+                </button>
+              </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {currentCourse.units.map((u) => {
                   const isOpen = openUnits[u.id] !== false; // open by default
@@ -851,6 +908,7 @@ export function App() {
                   allCourses={courses}
                   aiStatus={aiStatus}
                   onRefreshAIStatus={fetchAIStatus}
+                  onDeleteCourse={handleDeleteCourse}
                   onAddCompiledCourse={(newCourse) => {
                     setCourses((prev) => [newCourse, ...prev]);
                     setMasteryMap((prev) => {
