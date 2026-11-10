@@ -59,10 +59,26 @@ export function App() {
   // Starts with an empty course list (0 pre-filled data!) unless the user already imported their own class in v4
   const [courses, setCourses] = useState<CoursePack[]>(() => {
     try {
+      if (typeof window !== 'undefined' && window.location.search.includes('reset')) {
+        localStorage.removeItem(STORAGE_KEYS.COURSES);
+        localStorage.removeItem(STORAGE_KEYS.MASTERY);
+        localStorage.removeItem(STORAGE_KEYS.MISTAKES);
+        localStorage.removeItem(STORAGE_KEYS.TOUR_SEEN);
+        return [];
+      }
       const saved = localStorage.getItem(STORAGE_KEYS.COURSES);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          // Purge legacy mock courses so returning visitors get clean slate
+          const filtered = parsed.filter(
+            (c) =>
+              c.id !== 'cs-transformers-harness' &&
+              c.id !== 'bio-premed-energetics' &&
+              c.id !== 'econ-game-probability'
+          );
+          return filtered;
+        }
       }
     } catch {
       // Fallback
@@ -113,9 +129,14 @@ export function App() {
     return [];
   });
 
-  // Spotlight Tutorial Overlay State (automatically opens on first visit!)
+  // Spotlight Tutorial Overlay State (automatically opens on first visit or clean slate!)
   const [isTutorialOpen, setIsTutorialOpen] = useState<boolean>(() => {
     try {
+      if (typeof window !== 'undefined') {
+        if (window.location.search.includes('tour') || window.location.search.includes('reset')) {
+          return true;
+        }
+      }
       return localStorage.getItem(STORAGE_KEYS.TOUR_SEEN) !== 'true';
     } catch {
       return true;
