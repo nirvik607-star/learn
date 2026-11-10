@@ -2,7 +2,11 @@ import { useState, useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AITutorPanel } from './components/AITutorPanel';
 import { CelebrationBurst } from './components/CelebrationBurst';
-import { detectBridge } from './engine/aiClient';
+import {
+  detectBridge,
+  refineCourseWithAI,
+  getActiveAIProvider,
+} from './engine/aiClient';
 import {
   Gauge,
   Zap,
@@ -119,6 +123,8 @@ export function App() {
   const [burstKey, setBurstKey] = useState<number | null>(null);
   const [burstLabel, setBurstLabel] = useState<string>('');
   const [openUnits, setOpenUnits] = useState<Record<string, boolean>>({});
+  const [reanalyzing, setReanalyzing] = useState(false);
+  const activeAI = getActiveAIProvider();
 
   // Clean 0% Mastery Map (zero pre-filled answers!)
   const [masteryMap, setMasteryMap] = useState<Record<string, NodeMasteryState>>(
@@ -448,6 +454,38 @@ export function App() {
     setFocusedNodeId(nextCourses[0]?.nodes[0]?.id || null);
     if (nextCourses.length === 0) {
       setActiveTab('compiler_and_auth');
+    }
+  };
+
+  const handleReanalyzeWithAI = async () => {
+    if (!currentCourse) return;
+    setReanalyzing(true);
+    try {
+      const refined = await refineCourseWithAI(currentCourse);
+      if (refined && Array.isArray(refined.nodes) && refined.nodes.length > 0) {
+        setCourses((prev) => [
+          refined,
+          ...prev.filter((c) => c.id !== currentCourse.id && c.id !== refined.id),
+        ]);
+        setMasteryMap((prev) => {
+          const next = { ...prev };
+          refined.nodes.forEach((n) => {
+            next[n.id] = createInitialNodeState(n.id);
+          });
+          return next;
+        });
+        setSelectedCourseId(refined.id);
+        setSelectedUnitId(null);
+        setFocusedNodeId(refined.nodes[0]?.id || null);
+        setBurstKey(Date.now());
+        setBurstLabel(`✨ Re-Analyzed "${refined.title}" with ${refined.units.length} Units & ${refined.nodes.length} Concepts!`);
+        setTimeout(() => setBurstKey(null), 3500);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`AI Re-Analysis Failed: ${msg}. Test your connection in Setup.`);
+    } finally {
+      setReanalyzing(false);
     }
   };
 
@@ -958,7 +996,18 @@ export function App() {
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: '8px', flexShrink: 0 }}>
+              <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
+                {activeAI && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={reanalyzing}
+                    onClick={handleReanalyzeWithAI}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
+                  >
+                    <Sparkles size={13} /> {reanalyzing ? 'AI Re-Analyzing...' : `⚡ Re-Analyze & Fix with ${activeAI.name}`}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="btn btn-sm"
@@ -977,11 +1026,11 @@ export function App() {
                 </button>
                 <button
                   type="button"
-                  className="btn btn-sm btn-primary"
+                  className="btn btn-sm"
                   onClick={() => setActiveTab('compiler_and_auth')}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
                 >
-                  <Sparkles size={13} /> Open Setup to Repaste
+                  <Sparkles size={13} /> Open Setup
                 </button>
               </div>
             </div>

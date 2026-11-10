@@ -1,5 +1,11 @@
 import type { FailureCategory, PropositionNode, CoursePack } from '../types/harness';
-import { hydrateCoursePack, type DistilledCourseInput } from './courseCompiler';
+import {
+  hydrateCoursePack,
+  extractAndParseJSON,
+  extractFromMangledJSON,
+  JSON_KEY_BLACKLIST,
+  type DistilledCourseInput,
+} from './courseCompiler';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -499,47 +505,9 @@ export async function aiChat(
  */
 export function parseJSON<T>(text: string | null): T | null {
   if (!text) return null;
-
-  // 1. Check for markdown code fence
-  const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const target = codeBlock ? codeBlock[1].trim() : text.trim();
-
-  // 2. Direct JSON.parse
-  try {
-    return JSON.parse(target) as T;
-  } catch {
-    // continue
-  }
-
-  // 3. Slice between outermost { and }
-  const firstBrace = target.indexOf('{');
-  const lastBrace = target.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const slice = target.slice(firstBrace, lastBrace + 1);
-    try {
-      return JSON.parse(slice) as T;
-    } catch {
-      // continue to repair
-    }
-  }
-
-  // 4. Bracket/Brace repair for truncated JSON
-  try {
-    let repaired = target.slice(firstBrace !== -1 ? firstBrace : 0);
-    repaired = repaired.replace(/,\s*$/, ''); // remove trailing comma
-
-    const openBraces = (repaired.match(/\{/g) || []).length;
-    const closeBraces = (repaired.match(/\}/g) || []).length;
-    const openBrackets = (repaired.match(/\[/g) || []).length;
-    const closeBrackets = (repaired.match(/\]/g) || []).length;
-
-    for (let i = 0; i < openBrackets - closeBrackets; i++) repaired += ']';
-    for (let i = 0; i < openBraces - closeBraces; i++) repaired += '}';
-
-    return JSON.parse(repaired) as T;
-  } catch {
-    return null;
-  }
+  const parsed = extractAndParseJSON<T>(text);
+  if (parsed) return parsed;
+  return extractFromMangledJSON(text) as unknown as T;
 }
 
 function nodeContext(node: PropositionNode): string {
@@ -708,27 +676,31 @@ export async function compileCourseWithAI(
   code: string,
   examTitle: string
 ): Promise<CoursePack> {
-  const systemPrompt = `You are an expert cognitive curriculum architect following the LearnHarness doctrine (80/20 Pareto generator yield).
-Your task is to analyze the user's course material and synthesize a clean, high-yield knowledge graph.
+  const systemPrompt = `You are a world-class cognitive curriculum architect following the LearnHarness doctrine.
+Your objective is to deeply analyze the user's study material, lecture notes, syllabus, or session transcript and synthesize an interconnected 80/20 Knowledge Graph.
 
 CRITICAL RULES:
-1. Synthesize EXACTLY 3 to 5 Units (never create dozens of fragmented units!).
-2. Extract EXACTLY 3 to 6 Core Propositions per unit (total 12 to 22 concepts).
-3. Every proposition MUST be a genuine concept or invariant mechanism, NOT a sentence fragment or metadata.
-4. Set isUnconditionalTruth: true on the first 1-2 bedrock concepts in each unit (examWeight: 5).
-5. For each proposition, provide:
-   - title (clean 2-5 word concept name)
-   - statement (precise 1-sentence truth or mechanism)
-   - motivatedHook (what problem forces us to discover or care about this rule?)
-   - keyFormulaOrRule (governing invariant, formula, or constraint)
-   - commonMisconceptions (array of 2 common exam traps)
-   - confusableWith (adjacent similar concept students mix up on exams)
-6. Output valid JSON matching this schema:
+1. CURRICULUM OVER CHATTER: Filter out personal autobiographical details, disclaimers, conversational pleasantries, and administrative trivia. Extract ONLY load-bearing domain concepts, mechanisms, and governing rules!
+2. COHESIVE UNITS: Group material into EXACTLY 3 to 5 thematic Units (e.g. Unit 1: Bedrock Foundations & Invariants, Unit 2: Causal Mechanisms & Transformations, Unit 3: Verification, Edge Cases & Tradeoffs).
+3. 12 TO 18 LOAD-BEARING PROPOSITIONS: Extract 3 to 5 essential propositions per unit.
+4. UNCONDITIONAL TRUTHS FIRST: Set isUnconditionalTruth: true on the 1-2 bedrock concepts in each unit (examWeight: 5).
+5. REAL PREREQUISITE GRAPH:
+   - For every concept, specify "prerequisites": an array of proposition IDs (e.g. ["u1-n1", "u1-n2"]) that this concept logically depends on.
+   - Build a real, branched dependency graph (DAG) so the visual knowledge graph shows real conceptual pathways (not isolated nodes or a single straight line!).
+6. HIGH-CRAFT QUESTIONS FOR EACH PROPOSITION:
+   - title: Clean 2-5 word concept name (e.g. "Bottleneck Inversion")
+   - statement: Precise 1-sentence causal truth or governing mechanism
+   - motivatedHook: What problem forces us to discover or care about this rule?
+   - keyFormulaOrRule: Governing invariant, formula, or constraint
+   - commonMisconceptions: Array of 2 common exam traps in this domain
+   - confusableWith: Adjacent similar concept students mix up on exams
+
+Output valid JSON matching this schema:
 {
   "code": "${code}",
   "title": "${examTitle}",
   "examTitle": "${examTitle} — Comprehensive Mastery",
-  "institutionTag": "AI Distilled Set",
+  "institutionTag": "AI Cognitive Curriculum",
   "units": [
     { "id": "u1", "number": 1, "title": "Unit Name", "subtitle": "Core focus", "primingSummary": "Hook", "unconditionalTruthSummary": "Invariants" }
   ],
@@ -740,23 +712,24 @@ CRITICAL RULES:
       "statement": "Precise 1-sentence mechanism or rule",
       "isUnconditionalTruth": true,
       "examWeight": 5,
+      "prerequisites": [],
       "motivatedHook": "Why this matters",
       "keyFormulaOrRule": "Key rule",
-      "commonMisconceptions": ["Misconception A", "Misconception B"],
+      "commonMisconceptions": ["Trap A", "Trap B"],
       "confusableWith": "Adjacent concept"
     }
   ]
 }
 Return valid JSON only.`;
 
-  const userContent = `Course Code: ${code}\nExam Name: ${examTitle}\n\nStudy Material / Syllabus / Notes:\n${rawNotes.slice(0, 20000)}`;
+  const userContent = `Course Code: ${code}\nExam Name: ${examTitle}\n\nStudy Material / Syllabus / Notes to Analyze:\n${rawNotes.slice(0, 24000)}`;
 
   const text = await aiChat(
     [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent },
     ],
-    { json: true, maxTokens: 3500, temperature: 0.3 }
+    { json: true, maxTokens: 4000, temperature: 0.25 }
   );
 
   if (!text) {
@@ -779,37 +752,60 @@ Return valid JSON only.`;
 
 /**
  * Refines and cleans up any existing noisy or fragmented course pack using AI.
- * Distills it into a pristine 3-4 unit, 12-18 node 80/20 knowledge graph.
+ * Distills it into a pristine 3-4 unit, 12-18 node 80/20 knowledge graph with real prerequisites.
  */
 export async function refineCourseWithAI(course: CoursePack): Promise<CoursePack> {
-  const nodeSummary = course.nodes
-    .map((n, i) => `${i + 1}. [${n.title}]: ${n.statement}`)
+  // Discard raw JSON schema keys so we don't feed corrupted metadata back to the AI
+  const cleanNodes = course.nodes.filter(
+    (n) => !JSON_KEY_BLACKLIST.has(n.title.toLowerCase().replace(/["'{}[\]]/g, '').trim())
+  );
+  const targetNodes = cleanNodes.length >= 3 ? cleanNodes : course.nodes;
+
+  const nodeSummary = targetNodes
+    .map((n, i) => `${i + 1}. [${n.title}]: ${n.statement} ${n.teachingStep?.keyFormulaOrRule || ''}`)
     .join('\n');
 
   const text = await aiChat(
     [
       {
         role: 'system',
-        content: `You are an expert cognitive curriculum architect.
-We have an unrefined or fragmented list of concepts from a study set.
-Clean up, consolidate, deduplicate, and distill these into EXACTLY 3 to 4 cohesive Units, each containing 3 to 5 high-yield Propositions (total 12 to 18 concepts).
-Filter out all noise, metadata keys, and non-pedagogical fragments.
-Return JSON only matching the schema:
+        content: `You are an expert cognitive curriculum architect and exam engineer.
+We have an unrefined or corrupted study set. It may contain raw schema keys ('code', 'id', 'title', etc.) or fragmented lines from an unparsed document.
+Your task:
+1. ANALYZE AND EXTRACT: Identify the TRUE underlying subject matter, concepts, principles, and invariants. Completely DISCARD all JSON keys and schema words ('code', 'id', 'title', 'subtitle', 'primingSummary', etc.)!
+2. COHESIVE UNITS: Group into EXACTLY 3 to 4 progressive Units.
+3. 12 TO 18 LOAD-BEARING PROPOSITIONS: Extract 3 to 5 real conceptual propositions per unit with bedrock unconditional truths ranked examWeight: 5.
+4. PREREQUISITES: For each concept, specify an array of prerequisite concept IDs (e.g. ["u1-n1"]) so the knowledge graph is an interconnected DAG.
+5. DOMAIN QUESTIONS: Motivate each concept and identify common exam traps and confusable concepts.
+
+Return valid JSON only matching the schema:
 {
-  "code": "${course.code}",
-  "title": "${course.title}",
-  "examTitle": "${course.examTitle}",
-  "institutionTag": "${course.institutionTag}",
-  "units": [{ "id": "u1", "number": 1, "title": "...", "subtitle": "...", "primingSummary": "...", "unconditionalTruthSummary": "..." }],
-  "nodes": [{ "id": "u1-n1", "unitId": "u1", "title": "Clean Concept Name", "statement": "Clear 1-sentence truth", "isUnconditionalTruth": true, "examWeight": 5, "motivatedHook": "...", "keyFormulaOrRule": "...", "commonMisconceptions": ["..."], "confusableWith": "..." }]
+  "code": "${course.code || 'MASTERY-101'}",
+  "title": "${course.title || 'Course Mastery'}",
+  "examTitle": "${course.examTitle || 'Exam Mastery'}",
+  "institutionTag": "AI Refined Set",
+  "units": [{ "id": "u1", "number": 1, "title": "Unit 1: Name", "subtitle": "Focus", "primingSummary": "Hook", "unconditionalTruthSummary": "Invariants" }],
+  "nodes": [{
+    "id": "u1-n1",
+    "unitId": "u1",
+    "title": "Clean Concept Name",
+    "statement": "Clear 1-sentence truth or mechanism",
+    "isUnconditionalTruth": true,
+    "examWeight": 5,
+    "prerequisites": [],
+    "motivatedHook": "Why this matters",
+    "keyFormulaOrRule": "Governing rule or equation",
+    "commonMisconceptions": ["Misconception A", "Misconception B"],
+    "confusableWith": "Adjacent confusing concept"
+  }]
 }`,
       },
       {
         role: 'user',
-        content: `Existing Raw Concepts (${course.nodes.length} items):\n${nodeSummary.slice(0, 16000)}`,
+        content: `Existing Raw Concepts to Analyze (${targetNodes.length} items):\n${nodeSummary.slice(0, 18000)}`,
       },
     ],
-    { json: true, maxTokens: 3500, temperature: 0.25 }
+    { json: true, maxTokens: 4000, temperature: 0.25 }
   );
 
   if (!text) {
