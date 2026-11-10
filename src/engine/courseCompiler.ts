@@ -425,7 +425,17 @@ export function compileNotesToCoursePackLocally(params: {
 
     // Skip JSON syntax lines: braces, brackets, commas, quotes
     if (/^[{}[\],;'"\s]+$/.test(line)) continue;
-    if (/^["']?(id|lastUpdated|units|nodes|quizletStages|predictionPrompt|teachingStep)["']?\s*:/i.test(line)) continue;
+    if (/^["']?(id|lastUpdated|units|nodes|quizletStages|predictionPrompt|teachingStep|examTitle|description)["']?\s*:/i.test(line)) continue;
+
+    // Skip standalone key names or schema labels
+    if (/^["']?(code|title|institutionTag|examTitle|lastUpdated|description|units|nodes|prerequisites|examWeight)["']?$/i.test(line)) continue;
+    if (/^(course identity|course metadata|meta|metadata|identity|curriculum structure)[:.]?$/i.test(line)) continue;
+
+    // Skip autobiographical / first-person chat lines from previous AI tutoring sessions
+    if (/^[-*•\s]*(i('m| am| want| do not| do NOT| have| will| would| work| run| plan| need| build| feel| hope| wish)|my (background|goal|goals|project|focus|approach|work|career))\b/i.test(line)) continue;
+
+    // Skip conversational preamble & syllabus disclaimers
+    if (/^(this is not a traditional|create a comprehensive|in this session|welcome to|course overview|disclaimer|prerequisites:)/i.test(line)) continue;
 
     // Skip markdown horizontal rules
     if (/^[-*_]{3,}$/.test(line)) continue;

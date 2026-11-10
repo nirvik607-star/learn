@@ -143,83 +143,66 @@ interface CourseCompilerAndAuthModalProps {
   onDeleteCourse?: (courseId: string) => void;
 }
 
-function buildCompactAgentPrompt(courseCode: string, examName: string): string {
-  const code = courseCode.trim() || 'My Course';
-  const exam = examName.trim() || 'Upcoming Exam';
-  return `Read all lecture slides, PDFs, syllabus, and practice exams I provide for "${code}" (${exam}).
-Compile the high-yield material into a single JSON object (no extra text outside JSON) matching this schema:
+export function buildHandoffPrompt(courseCode: string, examName: string): string {
+  const code = courseCode.trim() || 'AI Leverage & Engineering Mastery';
+  const exam = examName.trim() || 'Comprehensive Mastery';
+  return `I am transferring our ongoing tutoring/learning session into ApexLearn Harness so I can lock this into permanent memory using active recall, 6-rung hint ladders, and the interactive knowledge graph.
+
+Based on everything we have covered so far in our conversation (including core mental models, governing principles, frameworks, edge cases, and my goals):
+
+Synthesize our curriculum into a high-yield 80/20 Knowledge Graph JSON for LearnHarness.
+
+CRITICAL INSTRUCTIONS:
+1. CURRICULUM OVER CHATTER: Filter out personal autobiographical details ("I am developing an app...", "My background..."), disclaimers ("This is not an academic course..."), and conversational pleasantries. Extract ONLY the load-bearing concepts, principles, and mechanisms!
+2. COHESIVE UNITS: Synthesize EXACTLY 3 to 5 thematic Units (e.g. Unit 1: Foundations & Core Invariants, Unit 2: Mechanisms & Architectural Moats, Unit 3: Verification & Execution).
+3. 80/20 PARETO PROPOSITIONS: Extract 4 to 6 core concepts per unit (total 12 to 20 load-bearing nodes). Focus on principles with the highest downstream generator yield.
+4. UNCONDITIONAL TRUTHS FIRST: Mark the 1-2 foundational bedrock invariants in each unit as isUnconditionalTruth: true with examWeight: 5.
+5. REQUIRED FIELDS PER CONCEPT:
+   - id: URL-friendly slug (e.g. "u1-bottleneck-inversion")
+   - unitId: matching parent unit id (e.g. "u1")
+   - title: Crisp 2-5 word concept name (e.g. "Bottleneck Inversion")
+   - statement: Precise 1-sentence causal truth or governing rule
+   - motivatedHook: What problem forces us to discover or care about this rule?
+   - keyFormulaOrRule: Governing invariant, formula, or rule of thumb
+   - commonMisconceptions: Array of 2 specific traps learners fall into
+   - confusableWith: Adjacent concept learners easily confuse this with
+6. OUTPUT FORMAT: Return a single valid JSON object matching this schema (NO commentary or text outside the JSON):
+
+\`\`\`json
 {
-  "id": "course-pack",
   "code": "${code}",
   "title": "${code}",
-  "institutionTag": "Compiled Study Set",
   "examTitle": "${exam}",
-  "description": "High-yield study set",
-  "lastUpdated": "${new Date().toISOString().slice(0, 10)}",
+  "institutionTag": "AI Handoff Study Pack",
   "units": [
-    { "id": "u1", "number": 1, "title": "Unit 1", "subtitle": "Core concepts", "examSharePercent": 100, "primingSummary": "Overview", "unconditionalTruthSummary": "Key rules" }
+    {
+      "id": "u1",
+      "number": 1,
+      "title": "Unit 1: Foundations & Constraints",
+      "subtitle": "Bedrock invariants and problem discovery",
+      "primingSummary": "Master the core constraints from which all system decisions derive.",
+      "unconditionalTruthSummary": "Lock in foundational invariants before multi-step architectures."
+    }
   ],
   "nodes": [
     {
-      "id": "n1",
+      "id": "u1-n1",
       "unitId": "u1",
-      "title": "Concept Name",
-      "statement": "Clear 1-sentence core rule or definition",
+      "title": "Bottleneck Inversion",
+      "statement": "High-leverage engineering starts at business constraints, not model capabilities; always optimize the binding bottleneck step first.",
       "isUnconditionalTruth": true,
-      "prerequisites": [],
       "examWeight": 5,
-      "motivatedHook": "Why this matters on the exam",
-      "predictionPrompt": { "question": "Quick prediction question?", "options": ["Right answer", "Wrong 1", "Wrong 2"], "correctIndex": 0, "resolution": "Why right" },
-      "teachingStep": {
-        "coreExplanation": "Clear intuition",
-        "visualMentalModel": "Input -> Mechanism -> Output",
-        "keyFormulaOrRule": "Key formula",
-        "checkQuestion": {
-          "question": "Quick check question?",
-          "options": [
-            { "text": "Correct", "diagnosticFeedback": "Right" },
-            { "text": "Trap", "diagnosticFeedback": "Why wrong" }
-          ],
-          "correctIndex": 0
-        }
-      },
-      "quizletStages": {
-        "recognition": {
-          "question": "Multiple choice question?",
-          "options": [
-            { "text": "Correct", "misconception": "None", "explanation": "Why right" },
-            { "text": "Distractor", "misconception": "Common trap", "explanation": "Why wrong" }
-          ],
-          "correctIndex": 0
-        },
-        "discrimination": {
-          "scenario": "Exam scenario",
-          "confusableWith": "Similar concept",
-          "question": "How to tell them apart?",
-          "options": [
-            { "text": "Correct distinction", "whyRightOrWrong": "Right" },
-            { "text": "Confused", "whyRightOrWrong": "Wrong" }
-          ],
-          "correctIndex": 0
-        },
-        "cuedRecall": {
-          "prompt": "Active recall question?",
-          "acceptedKeywords": ["keyword1", "keyword2"],
-          "canonicalAnswer": "Model answer",
-          "hints": ["R0: Clue", "R1: Pattern", "R2: Narrow", "R3: Rule name", "R4: Steps", "R5: Full answer"]
-        },
-        "application": {
-          "examProblem": "Exam problem",
-          "feynmanPrompt": "Explain simply",
-          "requiredMoves": [{ "id": "m1", "label": "Key step", "keywords": ["keyword1"] }],
-          "modelSolution": "Full solution",
-          "commonTraps": ["Common exam trap"],
-          "hints": ["R0: Clue", "R1: Pattern", "R2: Narrow", "R3: Rule", "R4: Steps", "R5: Full answer"]
-        }
-      }
+      "motivatedHook": "What breaks if we build features based on AI capabilities rather than the critical bottleneck constraint?",
+      "keyFormulaOrRule": "Constraint Throughput = System Throughput",
+      "commonMisconceptions": [
+        "Optimizing non-bottleneck steps yields proportional system gains.",
+        "Model parameter scale can compensate for an unaddressed process bottleneck."
+      ],
+      "confusableWith": "Local Optimization Fallacy"
     }
   ]
-}`;
+}
+\`\`\``;
 }
 
 export const CourseCompilerAndAuthModal: React.FC<
@@ -964,7 +947,8 @@ export const CourseCompilerAndAuthModal: React.FC<
     setClaudeCodeLabel('Run local app to check CLI');
   };
 
-  const promptText = buildCompactAgentPrompt(courseCode, examName);
+  const [showPromptPreview, setShowPromptPreview] = useState(false);
+  const promptText = buildHandoffPrompt(courseCode, examName);
 
   const handleCopyPrompt = () => {
     try {
@@ -978,6 +962,16 @@ export const CourseCompilerAndAuthModal: React.FC<
 
   const handleOpenInChatGPT = () => {
     const url = `https://chatgpt.com/?q=${encodeURIComponent(promptText)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleOpenInClaude = () => {
+    const url = `https://claude.ai/new?q=${encodeURIComponent(promptText)}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleOpenInGrok = () => {
+    const url = `https://x.com/i/grok?text=${encodeURIComponent(promptText)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
@@ -1176,13 +1170,13 @@ export const CourseCompilerAndAuthModal: React.FC<
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
             <span className="badge badge-accent" style={{ alignSelf: 'flex-start' }}>
-              STEP 1 · GATHER MATERIALS
+              STEP 1 · AI TUTOR HANDOFF PROMPT
             </span>
             <h3 style={{ fontSize: '1.02rem', fontWeight: 700 }}>
-              Have Your AI Build the Pack
+              Transfer from Previous AI Chat
             </h3>
-            <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              Drop your syllabus, slides, or practice exams into ChatGPT, Codex, or Claude with this prompt:
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+              Were you already learning with <strong>ChatGPT, Claude, Grok, or Cursor</strong>? Send this handoff prompt to that chat. It tells your AI to distill the whole session into a clean 80/20 knowledge graph JSON:
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -1190,33 +1184,83 @@ export const CourseCompilerAndAuthModal: React.FC<
                 className="input"
                 value={courseCode}
                 onChange={(e) => setCourseCode(e.target.value)}
-                placeholder="Course (e.g. BIO 202)"
+                placeholder="Course / Subject (e.g. AI Leverage Mastery)"
               />
               <input
                 className="input"
                 value={examName}
                 onChange={(e) => setExamName(e.target.value)}
-                placeholder="Exam (e.g. Midterm 1)"
+                placeholder="Target Exam or Goal (e.g. Product Engineering)"
               />
             </div>
+
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => setShowPromptPreview((p) => !p)}
+              style={{ fontSize: '0.72rem', alignSelf: 'flex-start', color: 'var(--text-muted)' }}
+            >
+              {showPromptPreview ? '▲ Hide Handoff Prompt Text' : '▼ Inspect Full Handoff Prompt'}
+            </button>
+
+            {showPromptPreview && (
+              <pre
+                className="mono"
+                style={{
+                  fontSize: '0.68rem',
+                  padding: '8px',
+                  background: 'var(--bg-elevated)',
+                  borderRadius: '4px',
+                  border: '1px solid var(--border-subtle)',
+                  maxHeight: '130px',
+                  overflowY: 'auto',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {promptText}
+              </pre>
+            )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <button
               type="button"
               className="btn btn-primary"
               onClick={handleCopyPrompt}
+              style={{ fontWeight: 600 }}
             >
               {copiedPrompt ? <Check size={14} /> : <Copy size={14} />}
-              {copiedPrompt ? 'Copied Prompt!' : 'Copy Agent Prompt'}
+              {copiedPrompt ? 'Copied Handoff Prompt!' : 'Copy AI Handoff Prompt'}
             </button>
-            <button
-              type="button"
-              className="btn"
-              onClick={handleOpenInChatGPT}
-            >
-              <ExternalLink size={14} /> Open Directly in ChatGPT
-            </button>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={handleOpenInChatGPT}
+                title="Open new chat with prompt in ChatGPT"
+                style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+              >
+                <ExternalLink size={11} /> ChatGPT
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={handleOpenInClaude}
+                title="Open new chat with prompt in Claude"
+                style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+              >
+                <ExternalLink size={11} /> Claude
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={handleOpenInGrok}
+                title="Open new chat with prompt in Grok"
+                style={{ fontSize: '0.72rem', padding: '4px 6px' }}
+              >
+                <ExternalLink size={11} /> Grok
+              </button>
+            </div>
           </div>
         </div>
 
