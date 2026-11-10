@@ -506,7 +506,7 @@ export function App() {
               onClick={() => setActiveTab('compiler_and_auth')}
             >
               <Bot size={15} />
-              1. Agent Class Setup & OpenAI Auth
+              Setup
             </button>
 
             <button
@@ -535,7 +535,7 @@ export function App() {
                 onClick={() => setActiveTab('quizlet_sprint')}
               >
                 <Zap size={15} />
-                Quizlet Learn Sprint
+                Learn
               </button>
               <button
                 className={`nav-tab ${
@@ -544,7 +544,7 @@ export function App() {
                 onClick={() => setActiveTab('socratic_graph')}
               >
                 <Network size={15} />
-                Socratic Graph & Probe
+                Graph
               </button>
               <button
                 className={`nav-tab ${
@@ -556,7 +556,7 @@ export function App() {
                 }}
               >
                 <AlertTriangle size={15} />
-                Mistakes & 80/20 Cram
+                Mistakes
                 {openMistakesCount > 0 && (
                   <span
                     className="mono"
@@ -585,9 +585,9 @@ export function App() {
                 setActiveTab('compiler_and_auth');
                 setIsTutorialOpen(true);
               }}
-              title="Open Interactive Dimmed-Screen Tutorial with Arrows & Bright Circles"
+              title="Open Interactive Tour"
             >
-              <Compass size={14} /> Tutorial
+              <Compass size={14} /> Tour
             </button>
 
             <div
@@ -601,7 +601,7 @@ export function App() {
                 border: '1px solid var(--border-subtle)',
                 fontSize: '0.78rem',
               }}
-              title="Ultradian Focus Block + 2-Minute NSDR Consolidation Timer"
+              title="25m Focus / 2m NSDR Rest Timer"
             >
               <Timer
                 size={14}
@@ -630,7 +630,7 @@ export function App() {
                   padding: 0,
                 }}
               >
-                {timerMode === 'focus_25m' ? 'Focus' : 'NSDR Rest'}
+                {timerMode === 'focus_25m' ? 'Focus' : 'NSDR'}
               </button>
               <span className="mono" style={{ fontWeight: 700 }}>
                 {formatTimer(timerSeconds)}
@@ -725,47 +725,33 @@ export function App() {
             }}
           />
         ) : !currentCourse || !readinessReport ? (
-          /* Clean Empty State When User Clicks a Study Tab Before Importing Their Class */
           <div
             className="card"
             style={{
-              padding: '44px 28px',
+              padding: '36px 24px',
               textAlign: 'center',
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
-              gap: '14px',
+              gap: '12px',
             }}
           >
-            <Bot size={42} style={{ color: 'var(--accent-primary)' }} />
-            <h2 className="serif-heading" style={{ fontSize: '1.6rem' }}>
-              Your Workspace Is 100% Clean — Ready for Your Class Materials
+            <Bot size={36} style={{ color: 'var(--accent-primary)' }} />
+            <h2 className="serif-heading" style={{ fontSize: '1.4rem' }}>
+              No Study Set Loaded Yet
             </h2>
-            <p
-              style={{
-                maxWidth: '580px',
-                color: 'var(--text-secondary)',
-                fontSize: '0.92rem',
-              }}
-            >
-              No pre-filled courses or fake scores. Use the{' '}
-              <strong>Agent Class Setup & OpenAI Auth</strong> tab to have OpenAI
-              Codex, ChatGPT, or Claude build your custom course pack from your
-              lecture slides & exams—or load a clean 0% sample course to test the
-              study tools first.
+            <p style={{ maxWidth: '420px', color: 'var(--text-secondary)', fontSize: '0.88rem' }}>
+              Import your class materials in Setup or try a sample set to start.
             </p>
-            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '6px' }}>
+            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
               <button
                 className="btn btn-primary"
                 onClick={() => setActiveTab('compiler_and_auth')}
               >
-                <Bot size={15} /> Go to Agent Class Setup & OpenAI Auth
+                Go to Setup
               </button>
-              <button
-                className="btn"
-                onClick={handleLoadOptionalSampleCourse}
-              >
-                <Sparkles size={15} /> Load Optional Sample Course (0% Clean Progress)
+              <button className="btn" onClick={handleLoadOptionalSampleCourse}>
+                <Sparkles size={14} /> Try Sample Set (0%)
               </button>
             </div>
           </div>
