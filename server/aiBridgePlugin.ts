@@ -23,6 +23,8 @@ import {
 const requireCjs = createRequire(import.meta.url);
 const { createChatGPT, fileStore } = requireCjs('../electron/chatgpt.cjs');
 const { chatGPTControl } = requireCjs('../electron/chatgpt-ipc.cjs');
+const { createSubscriptions, loadSubscriptionSDK } = requireCjs('../electron/subscriptions.cjs');
+const { subscriptionControl } = requireCjs('../electron/subscription-ipc.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -269,19 +271,27 @@ export function apexLearnAiBridgePlugin(): Plugin {
 
   const launches = new AsyncLocalStorage<string[]>();
   const browserActions = new Map<string, { target: string; expires: number }>();
+  const openExternalTarget = async (target: string) => {
+    const captured = launches.getStore();
+    if (captured) captured.push(target);
+    const openCmd =
+      process.platform === 'darwin'
+        ? 'open'
+        : process.platform === 'win32'
+        ? 'start'
+        : 'xdg-open';
+    execFile(openCmd, [target], () => {});
+  };
+
   const chatgptOwner = createChatGPT({
     store: fileStore(CHATGPT_CREDS_FILE),
-    openExternal: async (target: string) => {
-      const captured = launches.getStore();
-      if (captured) captured.push(target);
-      const openCmd =
-        process.platform === 'darwin'
-          ? 'open'
-          : process.platform === 'win32'
-          ? 'start'
-          : 'xdg-open';
-      execFile(openCmd, [target], () => {});
-    },
+    openExternal: openExternalTarget,
+  });
+
+  const nativeSubscriptions = createSubscriptions({
+    directory: os.homedir(),
+    loadSDK: () => loadSubscriptionSDK(process.cwd()),
+    openExternal: openExternalTarget,
   });
 
   const attachMiddleware = (server: ViteDevServer | PreviewServer) => {
@@ -331,19 +341,44 @@ export function apexLearnAiBridgePlugin(): Plugin {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
       try {
-        // LearnHarness /api/subscriptions (GET status, POST login/cancel/select/disconnect/logout/consent)
+        // LearnHarness /api/subscriptions (GET status, POST login/cancel/respond/open/retry/disconnect/logout/consent)
         if (urlObj.pathname === '/api/subscriptions') {
           if (req.method === 'GET') {
-            const chatgpt = await chatgptOwner.status();
-            res.end(JSON.stringify({ chatgpt, native: [] }));
+            const [chatgpt, native] = await Promise.all([
+              chatgptOwner.status(),
+              nativeSubscriptions.status(),
+            ]);
+            res.end(JSON.stringify({ chatgpt, native }));
             return;
           }
           if (req.method === 'POST') {
             const body = await readJsonBody(req);
+            const providerId = typeof body.providerId === 'string' ? body.providerId : 'chatgpt';
             const targets: string[] = [];
-            const value = await launches.run(targets, () =>
-              chatGPTControl(body, chatgptOwner)
-            );
+            let value: unknown;
+
+            if (providerId === 'chatgpt') {
+              value = await launches.run(targets, () =>
+                chatGPTControl(body, chatgptOwner)
+              );
+            } else if (body.op === 'login') {
+              // Start native login asynchronously so the HTTP call returns once interaction (device code / prompt / browser URL) is ready
+              void subscriptionControl({ ...body, providerId }, nativeSubscriptions).catch(() => {});
+              for (let i = 0; i < 20; i++) {
+                await new Promise((r) => setTimeout(r, 120));
+                const list = await nativeSubscriptions.status();
+                const current = list.find((s: { providerId: string }) => s.providerId === providerId);
+                if (current?.interaction || current?.connected || current?.error || !current?.pending) {
+                  break;
+                }
+              }
+              value = await nativeSubscriptions.status();
+            } else {
+              value = await launches.run(targets, () =>
+                subscriptionControl({ ...body, providerId }, nativeSubscriptions)
+              );
+            }
+
             let browserAction: string | undefined;
             let authUrl: string | undefined;
             if (targets[0]) {
@@ -355,9 +390,15 @@ export function apexLearnAiBridgePlugin(): Plugin {
               browserAction = `/api/subscriptions/browser?id=${id}`;
               authUrl = targets[0];
             }
+            const [chatgpt, native] = await Promise.all([
+              chatgptOwner.status(),
+              nativeSubscriptions.status(),
+            ]);
             res.end(
               JSON.stringify({
                 value,
+                chatgpt,
+                native,
                 ...(browserAction ? { browserAction, authUrl } : {}),
               })
             );
@@ -721,12 +762,25 @@ Rules:
               });
             } else if (
               (provider === 'anthropic-api' || provider === 'auto') &&
-              (stored.anthropicApiKey || process.env.ANTHROPIC_API_KEY)
+              (stored.anthropicApiKey || loadKeysMap().ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY)
             ) {
+              const antKey = (stored.anthropicApiKey || loadKeysMap().ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY)!;
               usedProvider = 'anthropic-api';
               reply = await callAnthropicMessages({
-                apiKey: (stored.anthropicApiKey || process.env.ANTHROPIC_API_KEY)!,
+                apiKey: antKey,
                 model: 'claude-3-5-haiku-latest',
+                systemPrompt,
+                userPrompt,
+              });
+            } else if (
+              (provider === 'xai' || provider === 'grok' || provider === 'auto') &&
+              (loadKeysMap().XAI_API_KEY || process.env.XAI_API_KEY)
+            ) {
+              usedProvider = 'xai-grok';
+              reply = await callOpenAICompatible({
+                endpoint: 'https://api.x.ai/v1',
+                apiKeyOrBearer: (loadKeysMap().XAI_API_KEY || process.env.XAI_API_KEY)!,
+                model: 'grok-beta',
                 systemPrompt,
                 userPrompt,
               });

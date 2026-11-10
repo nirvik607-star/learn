@@ -135,10 +135,62 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
     setTutorLoading(true);
     try {
       let savedOpenAIToken = '';
+      let savedXaiKey = '';
+      let savedAnthropicKey = '';
       try {
         savedOpenAIToken = localStorage.getItem('lh_openai_account_token') || '';
+        savedXaiKey = localStorage.getItem('lh_xai_key') || '';
+        savedAnthropicKey = localStorage.getItem('lh_anthropic_key') || '';
+        const savedKeysObj = JSON.parse(localStorage.getItem('lh_auth_keys_v1') || '{}');
+        if (!savedXaiKey && savedKeysObj.XAI_API_KEY) savedXaiKey = savedKeysObj.XAI_API_KEY;
+        if (!savedAnthropicKey && savedKeysObj.ANTHROPIC_API_KEY) savedAnthropicKey = savedKeysObj.ANTHROPIC_API_KEY;
+        if (!savedOpenAIToken && savedKeysObj.OPENAI_API_KEY) savedOpenAIToken = savedKeysObj.OPENAI_API_KEY;
       } catch {
         // ignore
+      }
+
+      // Check Grok (xAI)
+      if (savedXaiKey.startsWith('xai-') || savedXaiKey.length > 20) {
+        try {
+          const xaiRes = await fetch('https://api.x.ai/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${savedXaiKey}`,
+            },
+            body: JSON.stringify({
+              model: 'grok-beta',
+              max_tokens: 220,
+              messages: [
+                {
+                  role: 'system',
+                  content:
+                    tutorPersona === 'strict_examiner'
+                      ? `You are a strict exam grader. Concept: "${activeNode.title}" (${activeNode.statement}). Ask 1 sharp question testing causal mechanism in under 70 words.`
+                      : `You are a Socratic tutor. Concept: "${activeNode.title}" (${activeNode.statement}). Give 1 short hint in under 70 words without spoiling the answer.`,
+                },
+                {
+                  role: 'user',
+                  content: tutorInput.trim() || 'Give me a Socratic nudge on this concept.',
+                },
+              ],
+            }),
+          });
+          if (xaiRes.ok) {
+            const xaiData = await xaiRes.json();
+            const text = xaiData.choices?.[0]?.message?.content?.trim();
+            if (text) {
+              setTutorReply({
+                reply: text,
+                providerUsed: 'Grok (xAI grok-beta)',
+                cachedOrZeroToken: false,
+              });
+              return;
+            }
+          }
+        } catch {
+          // ignore
+        }
       }
 
       if (savedOpenAIToken.startsWith('sk-') || savedOpenAIToken.length > 28) {

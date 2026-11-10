@@ -21,12 +21,79 @@ import {
 } from '../core/auth-keys';
 import { compileNotesToCoursePackLocally } from '../engine/courseCompiler';
 
-// Borrowed directly from amosblomqvist/learnharness components/settings/chatgpt-connection.tsx
+// Borrowed directly from amosblomqvist/learnharness components/settings/chatgpt-connection.tsx & subscription-connections.tsx
 export const CHATGPT_NOTICE =
   'LearnHarness stores your ChatGPT account details and credentials in an unencrypted local file on this device. When this connection is used, relevant conversation context, learning material, and tool results are sent directly to OpenAI. ChatGPT plan limits apply; any additional credits are authorized and managed in ChatGPT, not LearnHarness.';
 export const CHATGPT_BACKGROUND_HINT =
   'Background work counts toward your ChatGPT plan usage.';
 const BACKGROUND_LABEL = 'Allow background use for all ChatGPT accounts';
+
+export type NativeSubscriptionProviderId = 'xai' | 'anthropic' | 'github-copilot';
+
+export const NATIVE_SUBSCRIPTIONS: readonly {
+  providerId: NativeSubscriptionProviderId;
+  logicalId: string;
+  label: string;
+  sublabel: string;
+}[] = [
+  { providerId: 'xai', logicalId: 'xai-subscription', label: 'Grok', sublabel: 'SuperGrok / X Premium' },
+  { providerId: 'anthropic', logicalId: 'anthropic-subscription', label: 'Anthropic', sublabel: 'Claude Pro / Max' },
+  { providerId: 'github-copilot', logicalId: 'github-copilot-subscription', label: 'GitHub Copilot', sublabel: 'Copilot Subscription' },
+];
+
+export const SUBSCRIPTION_BACKGROUND_HINT =
+  'Allow LearnHarness helper agents and automatic follow-ups to use this connection.';
+
+export function subscriptionNotice(label: string): string {
+  return `Your prompts, tool results, and relevant session context are sent to ${label} to run the work you select. Credentials are stored locally in an owner-only plaintext file. Provider terms, data-use policies, and plan limits apply. This connection never falls back to an API key.`;
+}
+
+export interface SubscriptionPrompt {
+  id: string;
+  type: 'text' | 'secret' | 'select' | 'manual_code';
+  message: string;
+  placeholder?: string;
+  options?: readonly { id: string; label: string; description?: string }[];
+}
+
+export interface SubscriptionInteraction {
+  attemptId: string;
+  prompt?: SubscriptionPrompt;
+  browser?: { id: string; url: string; fullUrl?: string };
+  userCode?: string;
+  progress?: string;
+}
+
+export interface NativeSubscriptionStatus {
+  providerId: NativeSubscriptionProviderId;
+  available: boolean;
+  connected: boolean;
+  pending: boolean;
+  committing?: boolean;
+  allowBackgroundUse: boolean;
+  connectionId: string | null;
+  epoch: number;
+  authorityRevision: number;
+  revision: number;
+  error?: string;
+  interaction?: SubscriptionInteraction;
+}
+
+export function emptySubscriptionStatus(
+  providerId: NativeSubscriptionProviderId
+): NativeSubscriptionStatus {
+  return {
+    providerId,
+    available: true,
+    connected: false,
+    pending: false,
+    allowBackgroundUse: true,
+    connectionId: null,
+    epoch: 0,
+    authorityRevision: 0,
+    revision: 0,
+  };
+}
 
 interface ChatGPTAccount {
   id: string;
@@ -47,8 +114,9 @@ interface ChatGPTStatus {
 }
 
 const DEFAULT_PROVIDER_ROWS = [
-  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', docsUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'xai', envVar: 'XAI_API_KEY', label: 'xAI (Grok)', docsUrl: 'https://console.x.ai' },
   { id: 'anthropic', envVar: 'ANTHROPIC_API_KEY', label: 'Anthropic', docsUrl: 'https://console.anthropic.com/settings/keys' },
+  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', docsUrl: 'https://platform.openai.com/api-keys' },
   { id: 'openrouter', envVar: 'OPENROUTER_API_KEY', label: 'OpenRouter', docsUrl: 'https://openrouter.ai/keys' },
   { id: 'google', envVar: 'GEMINI_API_KEY', label: 'Google', docsUrl: 'https://aistudio.google.com/app/apikey' },
 ];
@@ -186,6 +254,15 @@ export const CourseCompilerAndAuthModal: React.FC<
     label: string;
   } | null>(null);
 
+  // LearnHarness Native Subscriptions state (borrowed from subscription-connections.tsx: Grok/xai, Anthropic, GitHub Copilot)
+  const [nativeStatuses, setNativeStatuses] = useState<NativeSubscriptionStatus[]>(() =>
+    NATIVE_SUBSCRIPTIONS.map((s) => emptySubscriptionStatus(s.providerId))
+  );
+  const [nativeDialog, setNativeDialog] = useState<NativeSubscriptionProviderId | null>(null);
+  const [nativeBusy, setNativeBusy] = useState(false);
+  const [nativeError, setNativeError] = useState<string | null>(null);
+  const [nativePromptValue, setNativePromptValue] = useState('');
+
   // LearnHarness ChatGPT subscription dialog state (from chatgpt-connection.tsx)
   const [chatgptStatus, setChatgptStatus] = useState<ChatGPTStatus>({
     available: true,
@@ -224,6 +301,16 @@ export const CourseCompilerAndAuthModal: React.FC<
           if (subData.chatgpt) {
             setChatgptStatus(subData.chatgpt);
             setServerBaseUrl(base);
+          }
+          if (Array.isArray(subData.native)) {
+            setNativeStatuses(
+              NATIVE_SUBSCRIPTIONS.map(({ providerId }) => {
+                const found = subData.native.find(
+                  (s: NativeSubscriptionStatus) => s.providerId === providerId
+                );
+                return found ?? emptySubscriptionStatus(providerId);
+              })
+            );
           }
         }
         if (keysRes.ok) {
@@ -283,6 +370,8 @@ export const CourseCompilerAndAuthModal: React.FC<
         localStorage.setItem('lh_openai_account_token', trimmed);
       } else if (envVar === 'ANTHROPIC_API_KEY') {
         localStorage.setItem('lh_anthropic_key', trimmed);
+      } else if (envVar === 'XAI_API_KEY') {
+        localStorage.setItem('lh_xai_key', trimmed);
       }
     } catch {
       // ignore
@@ -314,6 +403,10 @@ export const CourseCompilerAndAuthModal: React.FC<
       localStorage.setItem('lh_auth_keys_v1', JSON.stringify(nextLocal));
       if (envVar === 'OPENAI_API_KEY') {
         localStorage.removeItem('lh_openai_account_token');
+      } else if (envVar === 'ANTHROPIC_API_KEY') {
+        localStorage.removeItem('lh_anthropic_key');
+      } else if (envVar === 'XAI_API_KEY') {
+        localStorage.removeItem('lh_xai_key');
       }
     } catch {
       // ignore
@@ -332,13 +425,348 @@ export const CourseCompilerAndAuthModal: React.FC<
     setKeyDraft('');
   };
 
-  // Exact LearnHarness withBrowser + electron/chatgpt.cjs login flow
   const toBase64Url = (bytes: Uint8Array): string => {
     let binary = '';
     for (let i = 0; i < bytes.byteLength; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
     return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
+
+  // Native Subscription Login (Grok/xai, Anthropic Claude Pro/Max, GitHub Copilot)
+  const handleStartNativeSubscription = async (providerId: NativeSubscriptionProviderId) => {
+    setNativeBusy(true);
+    setNativeError(null);
+    setNativePromptValue('');
+
+    // Reserve sign-in tab synchronously on click
+    const tab = window.open('about:blank', '_blank');
+    if (tab) {
+      try {
+        tab.opener = null;
+      } catch {
+        // ignore
+      }
+    }
+
+    // 1. Try LearnHarness /api/subscriptions backend (electron/subscriptions.cjs + @earendil-works/pi-ai)
+    for (const base of [serverBaseUrl ?? '', 'http://127.0.0.1:5173']) {
+      try {
+        const res = await fetch(`${base}/api/subscriptions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-learnharness-subscriptions': '1',
+          },
+          body: JSON.stringify({ providerId, op: 'login' }),
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const reply = await res.json();
+          const list: NativeSubscriptionStatus[] = Array.isArray(reply.native)
+            ? reply.native
+            : Array.isArray(reply.value)
+            ? reply.value
+            : [];
+          if (list.length > 0) {
+            setNativeStatuses((prev) =>
+              prev.map((old) => list.find((n) => n.providerId === old.providerId) ?? old)
+            );
+          }
+          const st = list.find((n) => n.providerId === providerId);
+          // If Anthropic prompted for login method ("browser" vs "copy_code"), auto-select "copy_code" so we get the auth_url immediately
+          if (
+            providerId === 'anthropic' &&
+            st?.interaction?.prompt?.type === 'select'
+          ) {
+            const resp = await fetch(`${base}/api/subscriptions`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'x-learnharness-subscriptions': '1',
+              },
+              body: JSON.stringify({
+                providerId,
+                op: 'respond',
+                attemptId: st.interaction.attemptId,
+                promptId: st.interaction.prompt.id,
+                value: 'copy_code',
+              }),
+            });
+            if (resp.ok) {
+              await new Promise((r) => setTimeout(r, 250));
+              const stRes = await fetch(`${base}/api/subscriptions`, {
+                headers: { 'x-learnharness-subscriptions': '1' },
+              });
+              if (stRes.ok) {
+                const stData = await stRes.json();
+                if (Array.isArray(stData.native)) {
+                  setNativeStatuses(
+                    NATIVE_SUBSCRIPTIONS.map(({ providerId: pid }) =>
+                      stData.native.find((x: NativeSubscriptionStatus) => x.providerId === pid) ??
+                      emptySubscriptionStatus(pid)
+                    )
+                  );
+                  const updated = stData.native.find(
+                    (x: NativeSubscriptionStatus) => x.providerId === providerId
+                  );
+                  if (updated?.interaction?.browser?.fullUrl && tab && !tab.closed) {
+                    tab.location.href = updated.interaction.browser.fullUrl;
+                  }
+                }
+              }
+            }
+          } else if (st?.interaction?.browser?.fullUrl && tab && !tab.closed) {
+            tab.location.href = st.interaction.browser.fullUrl;
+          } else {
+            tab?.close();
+          }
+
+          // Poll status until connected or cancelled
+          if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+          pollTimerRef.current = window.setInterval(async () => {
+            try {
+              const pollRes = await fetch(`${base}/api/subscriptions`, {
+                headers: { 'x-learnharness-subscriptions': '1' },
+              });
+              if (pollRes.ok) {
+                const pollData = await pollRes.json();
+                if (Array.isArray(pollData.native)) {
+                  setNativeStatuses(
+                    NATIVE_SUBSCRIPTIONS.map(({ providerId: pid }) =>
+                      pollData.native.find((x: NativeSubscriptionStatus) => x.providerId === pid) ??
+                      emptySubscriptionStatus(pid)
+                    )
+                  );
+                  const cur = pollData.native.find(
+                    (x: NativeSubscriptionStatus) => x.providerId === providerId
+                  );
+                  if (cur && !cur.pending) {
+                    if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
+                    setNativeBusy(false);
+                    if (cur.connected) setNativeDialog(null);
+                  }
+                }
+              }
+            } catch {
+              // ignore
+            }
+          }, 1500);
+          setNativeBusy(false);
+          return;
+        }
+      } catch {
+        // Static GitHub Pages fallback below
+      }
+    }
+
+    // 2. Static GitHub Pages fallback using exact @earendil-works/pi-ai OAuth parameters
+    try {
+      if (providerId === 'anthropic') {
+        // Exact @earendil-works/pi-ai/dist/auth/oauth/anthropic.js Copy-Code PKCE flow
+        const vBytes = new Uint8Array(32);
+        crypto.getRandomValues(vBytes);
+        const verifier = toBase64Url(vBytes);
+        const digest = await crypto.subtle.digest(
+          'SHA-256',
+          new TextEncoder().encode(verifier)
+        );
+        const challenge = toBase64Url(new Uint8Array(digest));
+        try {
+          localStorage.setItem('lh_anthropic_pkce_verifier', verifier);
+        } catch {
+          // ignore
+        }
+        const authParams = new URLSearchParams({
+          code: 'true',
+          client_id: '9d1c250a-e61b-44d9-88ed-5944d1962f5e',
+          response_type: 'code',
+          redirect_uri: 'https://platform.claude.com/oauth/code/callback',
+          scope:
+            'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload',
+          code_challenge: challenge,
+          code_challenge_method: 'S256',
+          state: verifier,
+        });
+        const authUrl = `https://claude.ai/oauth/authorize?${authParams.toString()}`;
+        if (tab && !tab.closed) tab.location.href = authUrl;
+        setNativeStatuses((prev) =>
+          prev.map((s) =>
+            s.providerId === 'anthropic'
+              ? {
+                  ...s,
+                  pending: true,
+                  interaction: {
+                    attemptId: 'static-anthropic',
+                    browser: { id: 'b1', url: 'https://claude.ai/oauth/authorize', fullUrl: authUrl },
+                    progress: 'Complete sign-in in your browser, then paste the code Anthropic shows:',
+                    prompt: {
+                      id: 'p1',
+                      type: 'manual_code',
+                      message: 'Paste the code Anthropic shows after you sign in (code#state):',
+                      placeholder: 'code#state',
+                    },
+                  },
+                }
+              : s
+          )
+        );
+      } else if (providerId === 'xai') {
+        // Exact @earendil-works/pi-ai/dist/auth/oauth/xai.js Device Code flow
+        let deviceUrl = 'https://accounts.x.ai/oauth2/device';
+        let userCode: string | undefined;
+        try {
+          const dcRes = await fetch('https://auth.x.ai/oauth2/device/code', {
+            method: 'POST',
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+              client_id: 'b1a00492-073a-47ea-816f-4c329264a828',
+              scope: 'openid profile email offline_access grok-cli:access api:access',
+              referrer: 'pi',
+            }),
+            signal: AbortSignal.timeout(2500),
+          });
+          if (dcRes.ok) {
+            const dcData = await dcRes.json();
+            userCode = dcData.user_code;
+            deviceUrl = dcData.verification_uri_complete || dcData.verification_uri || deviceUrl;
+          }
+        } catch {
+          // CORS fallback on static GitHub Pages
+        }
+        if (tab && !tab.closed) tab.location.href = deviceUrl;
+        setNativeStatuses((prev) =>
+          prev.map((s) =>
+            s.providerId === 'xai'
+              ? {
+                  ...s,
+                  pending: true,
+                  interaction: {
+                    attemptId: 'static-xai',
+                    userCode,
+                    browser: { id: 'b-xai', url: 'https://accounts.x.ai/oauth2/device', fullUrl: deviceUrl },
+                    progress: userCode
+                      ? 'Complete SuperGrok / X Premium device sign-in in your browser.'
+                      : 'Sign in with SuperGrok / X Premium in your browser, or paste your xAI token below:',
+                    prompt: {
+                      id: 'p-xai',
+                      type: 'text',
+                      message: 'Paste Grok / xAI token (or run local server for automatic device-code polling):',
+                      placeholder: 'xai-... or authorization code',
+                    },
+                  },
+                }
+              : s
+          )
+        );
+      } else {
+        // GitHub Copilot device login
+        const copilotUrl = 'https://github.com/login/device';
+        if (tab && !tab.closed) tab.location.href = copilotUrl;
+        setNativeStatuses((prev) =>
+          prev.map((s) =>
+            s.providerId === 'github-copilot'
+              ? {
+                  ...s,
+                  pending: true,
+                  interaction: {
+                    attemptId: 'static-copilot',
+                    browser: { id: 'b-gh', url: copilotUrl, fullUrl: copilotUrl },
+                    progress: 'Complete GitHub Copilot device sign-in in your browser.',
+                    prompt: {
+                      id: 'p-gh',
+                      type: 'text',
+                      message: 'Paste GitHub Copilot token or confirmation code:',
+                      placeholder: 'ghu_... or code',
+                    },
+                  },
+                }
+              : s
+          )
+        );
+      }
+    } catch {
+      tab?.close();
+      setNativeError('Sign-in could not be started. Try again.');
+    } finally {
+      setNativeBusy(false);
+    }
+  };
+
+  const handleSubmitNativePrompt = async (
+    providerId: NativeSubscriptionProviderId,
+    e: React.FormEvent
+  ) => {
+    e.preventDefault();
+    const val = nativePromptValue.trim();
+    if (!val) return;
+    const st = nativeStatuses.find((s) => s.providerId === providerId);
+
+    if (
+      serverBaseUrl !== null &&
+      st?.interaction?.attemptId &&
+      !st.interaction.attemptId.startsWith('static-') &&
+      st.interaction.prompt?.id
+    ) {
+      try {
+        setNativeBusy(true);
+        await fetch(`${serverBaseUrl}/api/subscriptions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-learnharness-subscriptions': '1',
+          },
+          body: JSON.stringify({
+            providerId,
+            op: 'respond',
+            attemptId: st.interaction.attemptId,
+            promptId: st.interaction.prompt.id,
+            value: val,
+          }),
+        });
+        setNativePromptValue('');
+        await refreshProvidersStatus();
+      } catch {
+        setNativeError('The connection could not be changed. Try again.');
+      } finally {
+        setNativeBusy(false);
+      }
+      return;
+    }
+
+    // Static completion
+    try {
+      if (providerId === 'xai') {
+        localStorage.setItem('lh_xai_key', val);
+        const nextLocal = { ...localKeys, XAI_API_KEY: val };
+        setLocalKeys(nextLocal);
+        localStorage.setItem('lh_auth_keys_v1', JSON.stringify(nextLocal));
+      } else if (providerId === 'anthropic') {
+        localStorage.setItem('lh_anthropic_key', val);
+      }
+    } catch {
+      // ignore
+    }
+
+    setNativeStatuses((prev) =>
+      prev.map((s) =>
+        s.providerId === providerId
+          ? {
+              ...s,
+              connected: true,
+              pending: false,
+              connectionId: `connected-${providerId}`,
+              interaction: undefined,
+              error: undefined,
+            }
+          : s
+      )
+    );
+    setNativePromptValue('');
+    setNativeDialog(null);
   };
 
   const handleContinueWithChatGPT = async () => {
@@ -358,7 +786,7 @@ export const CourseCompilerAndAuthModal: React.FC<
       // ignore
     }
 
-    // 1. Try LearnHarness /api/subscriptions backend (electron/chatgpt.cjs)
+    // 1. Try LearnHarness /api/subscriptions backend
     for (const base of [serverBaseUrl ?? '', 'http://127.0.0.1:5173']) {
       try {
         const res = await fetch(`${base}/api/subscriptions`, {
@@ -379,7 +807,6 @@ export const CourseCompilerAndAuthModal: React.FC<
           if (targetUrl && !tab.closed) {
             tab.location.href = targetUrl;
           }
-          // Poll status until callback finishes
           if (pollTimerRef.current) window.clearInterval(pollTimerRef.current);
           pollTimerRef.current = window.setInterval(async () => {
             try {
@@ -408,54 +835,45 @@ export const CourseCompilerAndAuthModal: React.FC<
       }
     }
 
-    // 2. Static GitHub Pages fallback using exact electron/chatgpt.cjs parameters (lines 336-346)
+    // 2. Static GitHub Pages fallback using @earendil-works/pi-ai openai-codex OAuth parameters
+    // (Uses client_id=app_EMoamEEZ73f0CkXaXp7hrann so personal & org accounts do not hit 3p_delegated_access_policy_denied)
     try {
       const verifierBytes = new Uint8Array(32);
-      const stateBytes = new Uint8Array(32);
-      const nonceBytes = new Uint8Array(32);
+      const stateBytes = new Uint8Array(16);
       crypto.getRandomValues(verifierBytes);
       crypto.getRandomValues(stateBytes);
-      crypto.getRandomValues(nonceBytes);
 
       const verifier = toBase64Url(verifierBytes);
-      const expectedState = toBase64Url(stateBytes);
-      const nonce = toBase64Url(nonceBytes);
+      const expectedState = Array.from(stateBytes)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
       const digest = await crypto.subtle.digest(
         'SHA-256',
         new TextEncoder().encode(verifier)
       );
       const challenge = toBase64Url(new Uint8Array(digest));
 
-      let hostId = 'urn:uuid:be5f8a22-91d4-4c60-8d9f-001122334455';
       try {
-        const savedHost = localStorage.getItem('lh_ext_agent_host_id');
-        if (savedHost) hostId = savedHost;
-        else {
-          hostId = `urn:uuid:${crypto.randomUUID()}`;
-          localStorage.setItem('lh_ext_agent_host_id', hostId);
-        }
         localStorage.setItem('lh_pkce_verifier', verifier);
       } catch {
         // ignore
       }
 
       const params = new URLSearchParams({
-        client_id: 'dynamic_agent_client',
-        agent_name_hint: 'LearnHarness',
-        ext_agent_host_id: hostId,
         response_type: 'code',
-        redirect_uri: 'http://127.0.0.1:1455/auth/callback',
-        scope:
-          'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct',
-        resource: 'https://api.openai.com/v1',
-        state: expectedState,
-        nonce,
-        code_challenge_method: 'S256',
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        redirect_uri: 'http://localhost:1455/auth/callback',
+        scope: 'openid profile email offline_access',
         code_challenge: challenge,
+        code_challenge_method: 'S256',
+        state: expectedState,
+        id_token_add_organizations: 'true',
+        codex_cli_simplified_flow: 'true',
+        originator: 'pi',
       });
 
       if (!tab.closed) {
-        tab.location.href = `https://auth.openai.com/api/accounts/authorize?${params.toString()}`;
+        tab.location.href = `https://auth.openai.com/oauth/authorize?${params.toString()}`;
       }
       setChatgptStatus((prev) => ({ ...prev, pending: true }));
     } catch {
@@ -471,7 +889,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     if (!raw) return;
     try {
       const urlObj = new URL(
-        raw.startsWith('http') ? raw : `http://127.0.0.1:1455/auth/callback?${raw}`
+        raw.startsWith('http') ? raw : `http://localhost:1455/auth/callback?${raw}`
       );
       const code = urlObj.searchParams.get('code') || raw;
       const clientId = urlObj.searchParams.get('client_id') || 'oaiapp_connected';
@@ -493,7 +911,7 @@ export const CourseCompilerAndAuthModal: React.FC<
         allowBackgroundUse: true,
         activeId: acct.id,
         accounts: [acct],
-        error: null,
+      error: null,
       });
       setCallbackPasteValue('');
       setChatgptDialogOpen(false);
@@ -828,7 +1246,7 @@ export const CourseCompilerAndAuthModal: React.FC<
               STEP 3 · PROVIDERS
             </span>
 
-            {/* Subscriptions Group (from subscription-connections.tsx & chatgpt-connection.tsx) */}
+            {/* Subscriptions Group (from subscription-connections.tsx: Grok, Anthropic, ChatGPT, GitHub Copilot) */}
             <div>
               <div
                 className="mono"
@@ -844,34 +1262,101 @@ export const CourseCompilerAndAuthModal: React.FC<
               <div
                 style={{
                   display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '6px 8px',
-                  borderRadius: '6px',
-                  background: 'var(--bg-elevated)',
+                  flexDirection: 'column',
+                  gap: '4px',
                   border: '1px solid var(--border-subtle)',
+                  borderRadius: '6px',
+                  padding: '4px',
+                  background: 'var(--bg-elevated)',
                 }}
-                data-testid="chatgpt-connection"
+                data-testid="subscription-connections"
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ fontSize: '0.84rem', fontWeight: 600 }}>ChatGPT</span>
-                  {activeChatGPT && (
-                    <span className="badge badge-success" style={{ fontSize: '0.68rem' }}>
-                      {activeChatGPT.email}
-                    </span>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  data-testid="chatgpt-login"
-                  onClick={() => {
-                    setChatgptError(null);
-                    setChatgptDialogOpen(true);
+                {NATIVE_SUBSCRIPTIONS.map((sub) => {
+                  const st =
+                    nativeStatuses.find((s) => s.providerId === sub.providerId) ??
+                    emptySubscriptionStatus(sub.providerId);
+                  return (
+                    <div
+                      key={sub.providerId}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '5px 8px',
+                        borderRadius: '4px',
+                      }}
+                      data-testid={`${sub.providerId}-connection`}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                          {sub.label}
+                        </span>
+                        <span
+                          className="mono"
+                          style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}
+                        >
+                          {sub.sublabel}
+                        </span>
+                        {st.connected && (
+                          <span className="badge badge-success" style={{ fontSize: '0.66rem' }}>
+                            Connected
+                          </span>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        style={{ padding: '3px 9px', fontSize: '0.74rem' }}
+                        onClick={() => {
+                          setNativeError(null);
+                          setNativePromptValue('');
+                          setNativeDialog(sub.providerId);
+                        }}
+                      >
+                        {st.connected || st.connectionId ? 'Manage…' : 'Connect'}
+                      </button>
+                    </div>
+                  );
+                })}
+
+                {/* ChatGPT row */}
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '5px 8px',
+                    borderRadius: '4px',
                   }}
+                  data-testid="chatgpt-connection"
                 >
-                  {activeChatGPT ? 'Manage…' : 'Connect'}
-                </button>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600 }}>ChatGPT</span>
+                    <span
+                      className="mono"
+                      style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}
+                    >
+                      Plus / Pro
+                    </span>
+                    {activeChatGPT && (
+                      <span className="badge badge-success" style={{ fontSize: '0.66rem' }}>
+                        {activeChatGPT.email}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ padding: '3px 9px', fontSize: '0.74rem' }}
+                    data-testid="chatgpt-login"
+                    onClick={() => {
+                      setChatgptError(null);
+                      setChatgptDialogOpen(true);
+                    }}
+                  >
+                    {activeChatGPT ? 'Manage…' : 'Connect'}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -1489,6 +1974,345 @@ export const CourseCompilerAndAuthModal: React.FC<
           </div>
         </div>
       )}
+
+      {/* LearnHarness Native Subscription Dialog (borrowed directly from components/settings/subscription-connections.tsx: Grok, Anthropic, GitHub Copilot) */}
+      {nativeDialog && (() => {
+        const descriptor = NATIVE_SUBSCRIPTIONS.find((p) => p.providerId === nativeDialog);
+        const status =
+          nativeStatuses.find((s) => s.providerId === nativeDialog) ??
+          emptySubscriptionStatus(nativeDialog);
+        if (!descriptor) return null;
+        const interaction = status.interaction;
+        const prompt = interaction?.prompt;
+
+        return (
+          <div
+            data-testid="subscription-dialog-backdrop"
+            onClick={() => !nativeBusy && setNativeDialog(null)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              zIndex: 9000,
+              background: 'rgba(6, 9, 17, 0.8)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '16px',
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={`${descriptor.label} connection`}
+              data-testid="subscription-connection-dialog"
+              onClick={(e) => e.stopPropagation()}
+              className="card"
+              style={{
+                width: '100%',
+                maxWidth: '480px',
+                padding: '20px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '12px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <h2 style={{ fontSize: '0.95rem', fontWeight: 600 }}>
+                  {descriptor.label}{' '}
+                  <span className="mono" style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                    ({descriptor.sublabel})
+                  </span>
+                </h2>
+                {status.connected && (
+                  <span className="badge badge-success">Connected</span>
+                )}
+              </div>
+
+              <p
+                data-testid="subscription-privacy-notice"
+                style={{
+                  fontSize: '0.78rem',
+                  lineHeight: 1.55,
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                {subscriptionNotice(descriptor.label)}
+              </p>
+
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '10px',
+                  fontSize: '0.78rem',
+                  cursor: 'pointer',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={status.allowBackgroundUse}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setNativeStatuses((prev) =>
+                      prev.map((s) =>
+                        s.providerId === nativeDialog ? { ...s, allowBackgroundUse: enabled } : s
+                      )
+                    );
+                    if (serverBaseUrl !== null) {
+                      void fetch(`${serverBaseUrl}/api/subscriptions`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-learnharness-subscriptions': '1',
+                        },
+                        body: JSON.stringify({
+                          providerId: nativeDialog,
+                          op: 'consent',
+                          enabled,
+                        }),
+                      });
+                    }
+                  }}
+                  style={{ marginTop: '3px' }}
+                />
+                <span>
+                  Allow background use
+                  <span
+                    style={{
+                      display: 'block',
+                      color: 'var(--text-muted)',
+                      marginTop: '2px',
+                    }}
+                  >
+                    {SUBSCRIPTION_BACKGROUND_HINT}
+                  </span>
+                </span>
+              </label>
+
+              {interaction && (
+                <div
+                  data-testid="subscription-login-interaction"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                    padding: '12px',
+                    borderRadius: '6px',
+                    background: 'var(--bg-elevated)',
+                    border: '1px solid var(--border-subtle)',
+                    fontSize: '0.78rem',
+                  }}
+                >
+                  {interaction.progress && (
+                    <p role="status" style={{ color: 'var(--text-secondary)' }}>
+                      {interaction.progress}
+                    </p>
+                  )}
+
+                  {interaction.userCode && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        background: 'var(--bg-surface)',
+                        border: '1px solid var(--border-strong)',
+                      }}
+                    >
+                      <span style={{ color: 'var(--text-secondary)' }}>Device code:</span>
+                      <code
+                        className="mono"
+                        style={{
+                          fontSize: '0.92rem',
+                          fontWeight: 700,
+                          color: 'var(--accent-primary)',
+                          userSelect: 'all',
+                        }}
+                      >
+                        {interaction.userCode}
+                      </code>
+                    </div>
+                  )}
+
+                  {interaction.browser?.fullUrl && (
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                      <a
+                        href={interaction.browser.fullUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="btn btn-sm"
+                      >
+                        Open browser ↗
+                      </a>
+                      {nativeDialog === 'xai' && (
+                        <a
+                          href="https://console.x.ai"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="btn btn-sm"
+                        >
+                          xAI Console ↗
+                        </a>
+                      )}
+                    </div>
+                  )}
+
+                  {prompt && (
+                    <form
+                      onSubmit={(e) => void handleSubmitNativePrompt(nativeDialog, e)}
+                      style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}
+                    >
+                      <label htmlFor="subscription-auth-prompt" style={{ fontWeight: 500 }}>
+                        {prompt.message}
+                      </label>
+                      {prompt.type === 'select' ? (
+                        <select
+                          id="subscription-auth-prompt"
+                          className="input"
+                          value={nativePromptValue}
+                          onChange={(e) => setNativePromptValue(e.target.value)}
+                          style={{ fontSize: '0.76rem', padding: '5px 8px' }}
+                        >
+                          <option value="" disabled>
+                            Select…
+                          </option>
+                          {prompt.options?.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          <input
+                            id="subscription-auth-prompt"
+                            className="input mono"
+                            type={prompt.type === 'secret' ? 'password' : 'text'}
+                            autoComplete="off"
+                            value={nativePromptValue}
+                            placeholder={prompt.placeholder}
+                            onChange={(e) => setNativePromptValue(e.target.value)}
+                            style={{ fontSize: '0.75rem', padding: '5px 8px' }}
+                          />
+                          <button
+                            type="submit"
+                            className="btn btn-sm btn-primary"
+                            disabled={nativeBusy || !nativePromptValue.trim()}
+                          >
+                            Continue
+                          </button>
+                        </div>
+                      )}
+                      {prompt.type === 'select' && (
+                        <button
+                          type="submit"
+                          className="btn btn-sm btn-primary"
+                          disabled={nativeBusy || !nativePromptValue}
+                          style={{ alignSelf: 'flex-start' }}
+                        >
+                          Continue
+                        </button>
+                      )}
+                    </form>
+                  )}
+                </div>
+              )}
+
+              {(nativeError || status.error) && (
+                <p role="alert" style={{ fontSize: '0.76rem', color: 'var(--danger)' }}>
+                  {nativeError || status.error}
+                </p>
+              )}
+
+              <div
+                data-testid="subscription-connection-footer"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  alignItems: 'center',
+                  gap: '8px',
+                  marginTop: '6px',
+                }}
+              >
+                {(status.connected || status.connectionId) && (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    style={{ color: 'var(--danger)', marginRight: 'auto' }}
+                    onClick={() => {
+                      if (serverBaseUrl !== null) {
+                        void fetch(`${serverBaseUrl}/api/subscriptions`, {
+                          method: 'POST',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            'x-learnharness-subscriptions': '1',
+                          },
+                          body: JSON.stringify({
+                            providerId: nativeDialog,
+                            op: 'disconnect',
+                          }),
+                        });
+                      }
+                      setNativeStatuses((prev) =>
+                        prev.map((s) =>
+                          s.providerId === nativeDialog ? emptySubscriptionStatus(nativeDialog) : s
+                        )
+                      );
+                    }}
+                  >
+                    Disconnect
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => {
+                    if (serverBaseUrl !== null && status.pending) {
+                      void fetch(`${serverBaseUrl}/api/subscriptions`, {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'x-learnharness-subscriptions': '1',
+                        },
+                        body: JSON.stringify({
+                          providerId: nativeDialog,
+                          op: 'cancel',
+                        }),
+                      });
+                    }
+                    setNativeStatuses((prev) =>
+                      prev.map((s) =>
+                        s.providerId === nativeDialog
+                          ? { ...s, pending: false, interaction: undefined, error: undefined }
+                          : s
+                      )
+                    );
+                    setNativeDialog(null);
+                  }}
+                >
+                  {status.connected ? 'Close' : 'Cancel'}
+                </button>
+
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={nativeBusy}
+                  onClick={() => void handleStartNativeSubscription(nativeDialog)}
+                >
+                  {nativeDialog === 'xai'
+                    ? 'Sign in with SuperGrok or X Premium'
+                    : nativeDialog === 'anthropic'
+                    ? 'Sign in with Claude Pro / Max'
+                    : 'Connect'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
