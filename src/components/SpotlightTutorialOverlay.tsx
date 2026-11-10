@@ -170,12 +170,12 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
             )}
           </mask>
           <marker id="lh-arrow" markerWidth="11" markerHeight="11" refX="8" refY="5.5" orient="auto">
-            <path d="M 0 1 L 10 5.5 L 0 10 z" fill="#38BDF8" />
+            <path d="M 0 1 L 10 5.5 L 0 10 z" fill="#e2a336" />
           </marker>
         </defs>
 
         {/* Dimmed Screen */}
-        <rect x="0" y="0" width={vw} height={vh} fill="rgba(4, 7, 15, 0.84)" mask="url(#lh-spot-mask)" />
+        <rect x="0" y="0" width={vw} height={vh} fill="rgba(5, 7, 10, 0.82)" mask="url(#lh-spot-mask)" />
 
         {/* Spotlight Outline */}
         {rect && (
@@ -184,24 +184,24 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
             y={boxTop}
             width={boxW}
             height={boxH}
-            rx="12"
+            rx="10"
             fill="none"
-            stroke="#38BDF8"
-            strokeWidth="2"
+            stroke="#e2a336"
+            strokeWidth="1.5"
           />
         )}
 
         {/* Bright Circle Target */}
-        <circle cx={circleX} cy={circleY} r={circleRadius + 9} fill="none" stroke="rgba(56, 189, 248, 0.4)" strokeWidth="2.5" />
-        <circle cx={circleX} cy={circleY} r={circleRadius} fill="rgba(251, 191, 36, 0.16)" stroke="#FBBF24" strokeWidth="3.5" />
-        <circle cx={circleX} cy={circleY} r="5" fill="#FBBF24" />
+        <circle cx={circleX} cy={circleY} r={circleRadius + 9} fill="none" stroke="rgba(226, 163, 54, 0.35)" strokeWidth="2" />
+        <circle cx={circleX} cy={circleY} r={circleRadius} fill="rgba(226, 163, 54, 0.14)" stroke="#e2a336" strokeWidth="2.5" />
+        <circle cx={circleX} cy={circleY} r="4.5" fill="#e2a336" />
 
         {/* Curved Arrow */}
         <path
           d={`M ${arrowStartX} ${arrowStartY} Q ${ctrlX} ${ctrlY} ${arrowEndX} ${arrowEndY}`}
           fill="none"
-          stroke="#38BDF8"
-          strokeWidth="3"
+          stroke="#e2a336"
+          strokeWidth="2.25"
           markerEnd="url(#lh-arrow)"
         />
       </svg>
@@ -213,12 +213,12 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
           top: `${cardTop}px`,
           left: `${cardLeft}px`,
           width: `${cardWidth}px`,
-          background: '#0F172A',
-          color: '#F8FAFC',
-          border: '1.5px solid #38BDF8',
-          borderRadius: '12px',
+          background: '#0f1217',
+          color: '#f2f4f8',
+          border: '1px solid rgba(226, 163, 54, 0.48)',
+          borderRadius: '10px',
           padding: '14px 16px',
-          boxShadow: '0 16px 40px rgba(0, 0, 0, 0.75)',
+          boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 20px 48px rgba(0, 0, 0, 0.78)',
           zIndex: 10000,
           display: 'flex',
           flexDirection: 'column',
@@ -226,7 +226,7 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span className="mono" style={{ fontSize: '0.72rem', fontWeight: 700, color: '#38BDF8' }}>
+          <span className="mono" style={{ fontSize: '0.72rem', fontWeight: 700, color: '#e2a336', letterSpacing: '0.06em' }}>
             STEP {currentStep.stepLabel}
           </span>
           <button
@@ -234,7 +234,7 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
             style={{
               background: 'transparent',
               border: 'none',
-              color: '#94A3B8',
+              color: '#9ba3b2',
               cursor: 'pointer',
               padding: '2px',
               display: 'flex',
@@ -245,11 +245,11 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
           </button>
         </div>
 
-        <div style={{ fontWeight: 700, fontSize: '0.98rem', color: '#FFF' }}>
+        <div style={{ fontWeight: 600, fontSize: '0.96rem', color: '#f2f4f8', letterSpacing: '-0.015em' }}>
           {currentStep.title}
         </div>
 
-        <p style={{ fontSize: '0.83rem', color: '#CBD5E1', lineHeight: 1.45 }}>
+        <p style={{ fontSize: '0.82rem', color: '#9ba3b2', lineHeight: 1.48 }}>
           {currentStep.text}
         </p>
 
@@ -260,9 +260,9 @@ export const SpotlightTutorialOverlay: React.FC<SpotlightTutorialOverlayProps> =
                 key={st.id}
                 style={{
                   width: idx === stepIndex ? '16px' : '6px',
-                  height: '6px',
+                  height: '5px',
                   borderRadius: '3px',
-                  background: idx === stepIndex ? '#38BDF8' : 'rgba(148,163,184,0.35)',
+                  background: idx === stepIndex ? '#e2a336' : 'rgba(155, 163, 178, 0.28)',
                 }}
               />
             ))}

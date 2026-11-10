@@ -407,7 +407,7 @@ export const CourseCompilerAndAuthModal: React.FC<
               }
               setAuthStatus({
                 ok: true,
-                label: '✓ OpenAI Account Connected',
+                label: 'OpenAI Account Connected',
                 detail: 'OAuth token verified.',
               });
               return;
@@ -422,7 +422,7 @@ export const CourseCompilerAndAuthModal: React.FC<
           }
           setAuthStatus({
             ok: true,
-            label: '✓ OpenAI Authorization Code Linked',
+            label: 'OpenAI Authorization Code Linked',
             detail: `Client ${issuedClientId.slice(0, 14)} authorized.`,
           });
           return;
@@ -451,7 +451,7 @@ export const CourseCompilerAndAuthModal: React.FC<
         }
         setAuthStatus({
           ok: true,
-          label: '✓ OpenAI Connected',
+          label: 'OpenAI Connected',
           detail: 'Verified with gpt-4o-mini.',
         });
       } else {
