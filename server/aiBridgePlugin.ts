@@ -1,15 +1,34 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { execFile } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import { createRequire } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import type { Plugin, ViteDevServer, PreviewServer } from 'vite';
+import {
+  AUTH_KEYS,
+  AUTH_PROVIDER_KEYS,
+  AUTH_PROVIDER_ENV_VARS,
+  type AuthKeyStatus,
+  genericProviderKeyGuard,
+  isKnownAuthKey,
+  isProviderEnvVar,
+  maskKey,
+  validateKeyShape,
+} from '../src/core/auth-keys.ts';
+
+const requireCjs = createRequire(import.meta.url);
+const { createChatGPT, fileStore } = requireCjs('../electron/chatgpt.cjs');
+const { chatGPTControl } = requireCjs('../electron/chatgpt-ipc.cjs');
 
 const execFileAsync = promisify(execFile);
 
 const AUTH_FILE = path.join(os.homedir(), '.apexlearn-auth.json');
+const KEYS_FILE = path.join(os.homedir(), '.learnharness-keys.json');
+const CHATGPT_CREDS_FILE = path.join(os.homedir(), '.learnharness-chatgpt-credentials.json');
 const OPENAI_ISSUER = 'https://auth.openai.com';
 const OPENAI_AUTHORIZE = `${OPENAI_ISSUER}/api/accounts/authorize`;
 const OPENAI_TOKEN = `${OPENAI_ISSUER}/api/accounts/oauth/token`;
@@ -22,6 +41,50 @@ const OPENAI_SCOPES = [
   'resource.invoke',
   'chatgpt.tokens.use.direct',
 ];
+
+function loadKeysMap(): Record<string, string> {
+  try {
+    if (fs.existsSync(KEYS_FILE)) {
+      return JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8'));
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+function saveKeysMap(map: Record<string, string>): void {
+  try {
+    fs.writeFileSync(KEYS_FILE, JSON.stringify(map, null, 2), { mode: 0o600 });
+  } catch {
+    // ignore
+  }
+}
+
+function computeKeyStatuses(): AuthKeyStatus[] {
+  const fileVars = loadKeysMap();
+  const ids = new Set<string>([...AUTH_KEYS.map((k) => k.id), ...Object.keys(fileVars)]);
+  for (const envVar of AUTH_PROVIDER_ENV_VARS) {
+    if (process.env[envVar] !== undefined || fileVars[envVar] !== undefined) {
+      ids.add(envVar);
+    }
+  }
+  const rows: AuthKeyStatus[] = [];
+  for (const id of ids) {
+    const envVal = process.env[id];
+    const fileVal = fileVars[id];
+    const live = envVal !== undefined ? envVal : fileVal;
+    rows.push({
+      id,
+      info: AUTH_KEYS.find((k) => k.id === id) ?? null,
+      present: live !== undefined,
+      masked: live !== undefined ? `${maskKey(live)} (${live.trim().length} chars)` : null,
+      source: envVal !== undefined ? 'env' : live !== undefined ? 'file' : 'none',
+      shadowedByEnv: envVal !== undefined && fileVal !== undefined && envVal !== fileVal,
+    });
+  }
+  return rows;
+}
 
 interface StoredAuthConfig {
   activeProvider?: string;
@@ -204,15 +267,40 @@ export function apexLearnAiBridgePlugin(): Plugin {
   let pendingOAuthServer: http.Server | null = null;
   let pendingOAuthUrl: string | null = null;
 
+  const launches = new AsyncLocalStorage<string[]>();
+  const browserActions = new Map<string, { target: string; expires: number }>();
+  const chatgptOwner = createChatGPT({
+    store: fileStore(CHATGPT_CREDS_FILE),
+    openExternal: async (target: string) => {
+      const captured = launches.getStore();
+      if (captured) captured.push(target);
+      const openCmd =
+        process.platform === 'darwin'
+          ? 'open'
+          : process.platform === 'win32'
+          ? 'start'
+          : 'xdg-open';
+      execFile(openCmd, [target], () => {});
+    },
+  });
+
   const attachMiddleware = (server: ViteDevServer | PreviewServer) => {
     server.middlewares.use(async (req, res, next) => {
-      if (!req.url?.startsWith('/api/ai/')) {
+      if (
+        !req.url?.startsWith('/api/ai/') &&
+        !req.url?.startsWith('/api/subscriptions') &&
+        !req.url?.startsWith('/api/keys') &&
+        !req.url?.startsWith('/api/claude-code')
+      ) {
         return next();
       }
 
       res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader(
+        'Access-Control-Allow-Headers',
+        'Content-Type, Authorization, x-learnharness-subscriptions, x-learnharness-claude-code'
+      );
       res.setHeader('Access-Control-Allow-Private-Network', 'true');
 
       if (req.method === 'OPTIONS') {
@@ -222,9 +310,126 @@ export function apexLearnAiBridgePlugin(): Plugin {
       }
 
       const urlObj = new URL(req.url, 'http://localhost');
+
+      // LearnHarness /api/subscriptions/browser?id=<uuid> 303 redirect
+      if (urlObj.pathname === '/api/subscriptions/browser') {
+        const id = urlObj.searchParams.get('id');
+        const action = id ? browserActions.get(id) : undefined;
+        if (id) browserActions.delete(id);
+        if (!action || action.expires <= Date.now()) {
+          res.statusCode = 410;
+          res.setHeader('Content-Type', 'application/json; charset=utf-8');
+          res.end(JSON.stringify({ error: 'This sign-in action is no longer available.' }));
+          return;
+        }
+        res.statusCode = 303;
+        res.setHeader('Location', action.target);
+        res.end();
+        return;
+      }
+
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
 
       try {
+        // LearnHarness /api/subscriptions (GET status, POST login/cancel/select/disconnect/logout/consent)
+        if (urlObj.pathname === '/api/subscriptions') {
+          if (req.method === 'GET') {
+            const chatgpt = await chatgptOwner.status();
+            res.end(JSON.stringify({ chatgpt, native: [] }));
+            return;
+          }
+          if (req.method === 'POST') {
+            const body = await readJsonBody(req);
+            const targets: string[] = [];
+            const value = await launches.run(targets, () =>
+              chatGPTControl(body, chatgptOwner)
+            );
+            let browserAction: string | undefined;
+            let authUrl: string | undefined;
+            if (targets[0]) {
+              const id = crypto.randomUUID();
+              browserActions.set(id, {
+                target: targets[0],
+                expires: Date.now() + 180000,
+              });
+              browserAction = `/api/subscriptions/browser?id=${id}`;
+              authUrl = targets[0];
+            }
+            res.end(
+              JSON.stringify({
+                value,
+                ...(browserAction ? { browserAction, authUrl } : {}),
+              })
+            );
+            return;
+          }
+        }
+
+        // LearnHarness /api/keys & /api/keys/:id
+        if (urlObj.pathname === '/api/keys' && req.method === 'GET') {
+          res.end(
+            JSON.stringify({
+              keys: computeKeyStatuses(),
+              providers: [...AUTH_PROVIDER_KEYS].sort((a, b) =>
+                a.id.localeCompare(b.id)
+              ),
+            })
+          );
+          return;
+        }
+
+        if (urlObj.pathname.startsWith('/api/keys/')) {
+          const keyId = decodeURIComponent(urlObj.pathname.slice('/api/keys/'.length));
+          if (req.method === 'PUT') {
+            const body = await readJsonBody(req);
+            const rawVal = typeof body.value === 'string' ? body.value : '';
+            const shape = isProviderEnvVar(keyId)
+              ? genericProviderKeyGuard(keyId, rawVal)
+              : isKnownAuthKey(keyId)
+              ? validateKeyShape(keyId, rawVal)
+              : genericProviderKeyGuard(keyId, rawVal);
+            if (!shape.ok) {
+              res.statusCode = 400;
+              res.end(JSON.stringify({ error: shape.error }));
+              return;
+            }
+            const trimmed = rawVal.trim();
+            const map = loadKeysMap();
+            map[keyId] = trimmed;
+            saveKeysMap(map);
+            const stored = loadStoredConfig();
+            if (keyId === 'OPENAI_API_KEY') {
+              saveStoredConfig({ ...stored, openaiApiKey: trimmed });
+            } else if (keyId === 'ANTHROPIC_API_KEY') {
+              saveStoredConfig({ ...stored, anthropicApiKey: trimmed });
+            }
+            const status = computeKeyStatuses().find((s) => s.id === keyId);
+            res.end(JSON.stringify({ ok: true, status }));
+            return;
+          }
+          if (req.method === 'DELETE') {
+            const map = loadKeysMap();
+            delete map[keyId];
+            saveKeysMap(map);
+            res.end(JSON.stringify({ ok: true }));
+            return;
+          }
+        }
+
+        // LearnHarness /api/claude-code
+        if (urlObj.pathname === '/api/claude-code' && req.method === 'GET') {
+          const ver = await detectCliVersion('claude');
+          const verMatch = ver?.match(/(\d+\.\d+\.\d+)/)?.[1] ?? null;
+          res.end(
+            JSON.stringify({
+              state: ver ? 'meets-minimum' : 'not-found',
+              version: verMatch,
+              minimumVersion: '1.0.0',
+            })
+          );
+          return;
+        }
+
         const stored = loadStoredConfig();
         const stats = stored.tokenStats ?? {
           localZeroTokenActions: 0,
@@ -234,20 +439,27 @@ export function apexLearnAiBridgePlugin(): Plugin {
         };
 
         if (urlObj.pathname === '/api/ai/status' && req.method === 'GET') {
-          const [codexVer, claudeVer] = await Promise.all([
+          const [codexVer, claudeVer, chatgptState] = await Promise.all([
             detectCliVersion('codex'),
             detectCliVersion('claude'),
+            chatgptOwner.status(),
           ]);
+          const keysMap = loadKeysMap();
 
           const openaiKeyConfigured = Boolean(
-            stored.openaiApiKey || process.env.OPENAI_API_KEY
+            stored.openaiApiKey || keysMap.OPENAI_API_KEY || process.env.OPENAI_API_KEY
           );
           const anthropicKeyConfigured = Boolean(
-            stored.anthropicApiKey || process.env.ANTHROPIC_API_KEY
+            stored.anthropicApiKey || keysMap.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
+          );
+          const activeChatGPTAccount = chatgptState.accounts?.find(
+            (a: { id: string; connected: boolean }) =>
+              a.id === chatgptState.activeId && a.connected
           );
           const chatgptOAuthConnected = Boolean(
-            stored.chatgptOAuth?.accessToken &&
-              stored.chatgptOAuth.expiresAt > Date.now()
+            activeChatGPTAccount ||
+              (stored.chatgptOAuth?.accessToken &&
+                stored.chatgptOAuth.expiresAt > Date.now())
           );
 
           let activeProvider = stored.activeProvider || 'auto';
@@ -268,8 +480,9 @@ export function apexLearnAiBridgePlugin(): Plugin {
               claudeCliAvailable: Boolean(claudeVer),
               claudeCliVersion: claudeVer ?? undefined,
               chatgptOAuthConnected,
-              chatgptOAuthEmail: stored.chatgptOAuth?.email,
-              chatgptOAuthPending: Boolean(pendingOAuthServer),
+              chatgptOAuthEmail:
+                activeChatGPTAccount?.email || stored.chatgptOAuth?.email,
+              chatgptOAuthPending: Boolean(chatgptState.pending || pendingOAuthServer),
               chatgptOAuthUrl: pendingOAuthUrl ?? undefined,
               openaiKeyConfigured,
               anthropicKeyConfigured,
