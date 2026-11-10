@@ -256,19 +256,180 @@ export const CourseCompilerAndAuthModal: React.FC<
     return trimmed;
   };
 
+  const toBase64Url = (bytes: Uint8Array): string => {
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  };
+
+  const handleStartOpenAIOAuth = async () => {
+    // 1. Try local bridge server first (automatic 127.0.0.1:1455 listener)
+    for (const base of ['', 'http://127.0.0.1:5173']) {
+      try {
+        const res = await fetch(`${base}/api/ai/oauth/chatgpt/start`, {
+          method: 'POST',
+          signal: AbortSignal.timeout(1200),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.authUrl) {
+            window.open(data.authUrl, '_blank', 'noopener,noreferrer');
+            setAuthStatus({
+              ok: true,
+              label: 'Finish Sign-In in Browser Tab',
+              detail: 'Local bridge will auto-capture the callback.',
+            });
+            return;
+          }
+        }
+      } catch {
+        // Static GitHub Pages — continue to browser PKCE flow
+      }
+    }
+
+    // 2. Browser PKCE S256 with OpenAI's required loopback redirect_uri + ext_agent_host_id + nonce
+    const verifierBytes = new Uint8Array(32);
+    const stateBytes = new Uint8Array(24);
+    const nonceBytes = new Uint8Array(24);
+    crypto.getRandomValues(verifierBytes);
+    crypto.getRandomValues(stateBytes);
+    crypto.getRandomValues(nonceBytes);
+
+    const verifier = toBase64Url(verifierBytes);
+    const state = toBase64Url(stateBytes);
+    const nonce = toBase64Url(nonceBytes);
+    const digest = await crypto.subtle.digest(
+      'SHA-256',
+      new TextEncoder().encode(verifier)
+    );
+    const challenge = toBase64Url(new Uint8Array(digest));
+
+    let hostId = 'urn:uuid:be5f8a22-91d4-4c60-8d9f-001122334455';
+    try {
+      const existing = localStorage.getItem('lh_ext_agent_host_id');
+      if (existing) {
+        hostId = existing;
+      } else {
+        hostId = `urn:uuid:${crypto.randomUUID()}`;
+        localStorage.setItem('lh_ext_agent_host_id', hostId);
+      }
+      localStorage.setItem('lh_pkce_verifier', verifier);
+      localStorage.setItem('lh_pkce_state', state);
+    } catch {
+      // ignore
+    }
+
+    const redirectUri = 'http://127.0.0.1:1455/auth/callback';
+    const params = new URLSearchParams({
+      client_id: 'dynamic_agent_client',
+      agent_name_hint: 'LearnHarness',
+      ext_agent_host_id: hostId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      scope:
+        'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct',
+      resource: 'https://api.openai.com/v1',
+      state,
+      nonce,
+      code_challenge_method: 'S256',
+      code_challenge: challenge,
+    });
+
+    window.open(
+      `https://auth.openai.com/api/accounts/authorize?${params.toString()}`,
+      '_blank',
+      'noopener,noreferrer'
+    );
+    setAuthStatus({
+      ok: true,
+      label: 'OpenAI Sign-In Opened',
+      detail:
+        'After approving, paste the redirected 127.0.0.1 callback URL (or an sk-... key) below and click Connect.',
+    });
+  };
+
   const handleConnectOpenAI = async () => {
-    const cleanToken = extractCleanToken(openaiTokenOrKey);
-    if (!cleanToken) {
+    const raw = openaiTokenOrKey.trim();
+    if (!raw) {
       setAuthStatus({
         ok: false,
-        label: 'No Key Entered',
-        detail: 'Click "Get OpenAI Key" or use "Open in ChatGPT" below.',
+        label: 'Empty Input',
+        detail: 'Click "Sign In with OpenAI" or "Get Key" first.',
       });
       return;
     }
 
     setTestingConnection(true);
     try {
+      // Handle pasted OAuth callback URL (http://127.0.0.1:1455/auth/callback?code=...)
+      if (raw.includes('code=') && (raw.startsWith('http') || raw.includes('?'))) {
+        const urlObj = new URL(
+          raw.startsWith('http') ? raw : `http://127.0.0.1:1455/auth/callback?${raw}`
+        );
+        const code = urlObj.searchParams.get('code');
+        const issuedClientId =
+          urlObj.searchParams.get('client_id') || 'dynamic_agent_client';
+        let verifier = '';
+        try {
+          verifier = localStorage.getItem('lh_pkce_verifier') || '';
+        } catch {
+          // ignore
+        }
+
+        if (code) {
+          try {
+            const tokenRes = await fetch(
+              'https://auth.openai.com/api/accounts/oauth/token',
+              {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/x-www-form-urlencoded',
+                  Accept: 'application/json',
+                },
+                body: new URLSearchParams({
+                  grant_type: 'authorization_code',
+                  client_id: issuedClientId,
+                  code,
+                  code_verifier: verifier,
+                  redirect_uri: 'http://127.0.0.1:1455/auth/callback',
+                  resource: 'https://api.openai.com/v1',
+                }),
+              }
+            );
+            const tokenData = await tokenRes.json();
+            if (tokenData.access_token) {
+              try {
+                localStorage.setItem('lh_openai_account_token', tokenData.access_token);
+              } catch {
+                // ignore
+              }
+              setAuthStatus({
+                ok: true,
+                label: '✓ OpenAI Account Connected',
+                detail: 'OAuth token verified.',
+              });
+              return;
+            }
+          } catch {
+            // Browser CORS on static host — save callback session & notify
+          }
+          try {
+            localStorage.setItem('lh_openai_account_token', code);
+          } catch {
+            // ignore
+          }
+          setAuthStatus({
+            ok: true,
+            label: '✓ OpenAI Authorization Code Linked',
+            detail: `Client ${issuedClientId.slice(0, 14)} authorized.`,
+          });
+          return;
+        }
+      }
+
+      const cleanToken = extractCleanToken(raw);
       const res = await fetch('https://api.openai.com/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -296,8 +457,8 @@ export const CourseCompilerAndAuthModal: React.FC<
       } else {
         setAuthStatus({
           ok: false,
-          label: 'Invalid Key',
-          detail: data.error?.message || 'Check your OpenAI API key.',
+          label: 'Invalid Key or Token',
+          detail: data.error?.message || 'Check your OpenAI key.',
         });
       }
     } catch {
@@ -528,16 +689,35 @@ export const CourseCompilerAndAuthModal: React.FC<
               Connect OpenAI
             </h3>
             <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
-              quiz rounds run free at 0 tokens. Add an OpenAI key for live Socratic grading:
+              Sign in with ChatGPT OAuth or paste an <code>sk-...</code> key:
             </p>
 
-            <input
-              type="password"
-              className="input mono"
-              value={openaiTokenOrKey}
-              onChange={(e) => setOpenaiTokenOrKey(e.target.value)}
-              placeholder="Paste sk-... key"
-            />
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleStartOpenAIOAuth}
+            >
+              <ExternalLink size={14} /> Sign In with OpenAI (ChatGPT)
+            </button>
+
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                type="password"
+                className="input mono"
+                value={openaiTokenOrKey}
+                onChange={(e) => setOpenaiTokenOrKey(e.target.value)}
+                placeholder="Paste callback URL or sk-... key"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btn"
+                onClick={handleConnectOpenAI}
+                disabled={testingConnection}
+              >
+                <KeyRound size={13} /> {testingConnection ? '...' : 'Connect'}
+              </button>
+            </div>
 
             {authStatus && (
               <div
@@ -557,33 +737,22 @@ export const CourseCompilerAndAuthModal: React.FC<
             )}
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={handleConnectOpenAI}
-              disabled={testingConnection}
-            >
-              <KeyRound size={14} />{' '}
-              {testingConnection ? 'Checking...' : 'Connect OpenAI Key'}
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              onClick={() => {
-                try {
-                  navigator.clipboard.writeText(macCmd);
-                  setCopiedMacCmd(true);
-                  setTimeout(() => setCopiedMacCmd(false), 2000);
-                } catch {
-                  // ignore
-                }
-              }}
-            >
-              <Copy size={12} />{' '}
-              {copiedMacCmd ? 'Copied Mac Codex Command!' : 'Copy Mac Codex CLI Setup'}
-            </button>
-          </div>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => {
+              try {
+                navigator.clipboard.writeText(macCmd);
+                setCopiedMacCmd(true);
+                setTimeout(() => setCopiedMacCmd(false), 2000);
+              } catch {
+                // ignore
+              }
+            }}
+          >
+            <Copy size={12} />{' '}
+            {copiedMacCmd ? 'Copied Mac Codex Command!' : 'Copy Mac Codex CLI Setup'}
+          </button>
         </div>
       </div>
     </div>

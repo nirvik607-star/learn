@@ -326,18 +326,21 @@ export function apexLearnAiBridgePlugin(): Plugin {
 
           const callbackServer = http.createServer();
           await new Promise<void>((resolve, reject) => {
-            callbackServer.once('error', reject);
-            callbackServer.listen(0, '127.0.0.1', () => resolve());
+            callbackServer.once('error', () => {
+              callbackServer.once('error', reject);
+              callbackServer.listen(0, '127.0.0.1', () => resolve());
+            });
+            callbackServer.listen(1455, '127.0.0.1', () => resolve());
           });
 
           const address = callbackServer.address();
-          const port = typeof address === 'object' && address ? address.port : 0;
+          const port = typeof address === 'object' && address ? address.port : 1455;
           const redirectUri = `http://127.0.0.1:${port}/auth/callback`;
 
           const authUrl = new URL(OPENAI_AUTHORIZE);
           authUrl.search = new URLSearchParams({
             client_id: 'dynamic_agent_client',
-            agent_name_hint: 'ApexLearnHarness',
+            agent_name_hint: 'LearnHarness',
             ext_agent_host_id: hostId,
             response_type: 'code',
             redirect_uri: redirectUri,

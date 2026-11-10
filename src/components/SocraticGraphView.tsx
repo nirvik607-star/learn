@@ -134,25 +134,70 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
     if (!activeNode) return;
     setTutorLoading(true);
     try {
+      let savedOpenAIToken = '';
+      try {
+        savedOpenAIToken = localStorage.getItem('lh_openai_account_token') || '';
+      } catch {
+        // ignore
+      }
+
+      if (savedOpenAIToken.startsWith('sk-') || savedOpenAIToken.length > 28) {
+        const oaiRes = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${savedOpenAIToken}`,
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            max_tokens: 220,
+            messages: [
+              {
+                role: 'system',
+                content:
+                  tutorPersona === 'strict_examiner'
+                    ? `You are a strict exam grader. Concept: "${activeNode.title}" (${activeNode.statement}). Ask 1 sharp question testing causal mechanism in under 70 words.`
+                    : `You are a Socratic tutor. Concept: "${activeNode.title}" (${activeNode.statement}). Give 1 short hint in under 70 words without spoiling the answer.`,
+              },
+              {
+                role: 'user',
+                content: tutorInput.trim() || 'Give me a Socratic nudge on this concept.',
+              },
+            ],
+          }),
+        });
+        if (oaiRes.ok) {
+          const oaiData = await oaiRes.json();
+          const text = oaiData.choices?.[0]?.message?.content?.trim();
+          if (text) {
+            setTutorReply({
+              reply: text,
+              providerUsed: 'OpenAI (gpt-4o-mini)',
+              cachedOrZeroToken: false,
+            });
+            return;
+          }
+        }
+      }
+
       const res = await fetch('/api/ai/tutor', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: tutorPersona === 'strict_examiner' ? 'strict_examiner' : 'socratic_hint',
           nodeTitle: activeNode.title,
-          unconditionalTruth: activeNode.statement,
-          questionPrompt:
+          nodeStatement: activeNode.statement,
+          learnerInput:
             tutorInput.trim() ||
-            `Probe my causal understanding of "${activeNode.title}" and test if I am hiding behind jargon.`,
-          learnerResponse: tutorInput,
-          hintLevel: 2,
+            `Probe my causal understanding of "${activeNode.title}".`,
+          learnerThinking: tutorInput,
         }),
       });
       if (res.ok) {
         const data = await res.json();
         setTutorReply({
           reply: data.reply || data.message || activeNode.teachingStep.coreExplanation,
-          providerUsed: data.providerUsed || '0-Token Local Socratic Engine',
+          providerUsed: data.provider || data.providerUsed || '0-Token Local Coach',
           cachedOrZeroToken: Boolean(data.cachedOrZeroToken ?? true),
         });
       } else {
@@ -162,9 +207,9 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
       setTutorReply({
         reply:
           tutorPersona === 'strict_examiner'
-            ? `[Strict Examiner]: State the exact causal chain for "${activeNode.title}" without relying on buzzwords. Specifically: ${activeNode.quizletStages.application.feynmanPrompt}`
-            : `[Socratic Coach]: Focus on the governing invariant: ${activeNode.quizletStages.cuedRecall.hints[2]}`,
-        providerUsed: '0-Token Local Doctrine Engine',
+            ? `[Strict Examiner]: State the exact causal chain for "${activeNode.title}" without buzzwords: ${activeNode.quizletStages.application.feynmanPrompt}`
+            : `[Socratic Coach]: Focus on the key clue: ${activeNode.quizletStages.cuedRecall.hints[2]}`,
+        providerUsed: '0-Token Local Coach',
         cachedOrZeroToken: true,
       });
     } finally {
