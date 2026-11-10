@@ -23,6 +23,8 @@ import {
   compileNotesToCoursePackLocally,
   extractAndParseJSON,
   extractFromMangledJSON,
+  hydrateCoursePack,
+  type DistilledCourseInput,
 } from '../engine/courseCompiler';
 import {
   compileCourseWithAI,
@@ -1055,17 +1057,12 @@ export const CourseCompilerAndAuthModal: React.FC<
     }
   };
 
-  const handleBuildOrImportCourse = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleBuildLocallyOnly = () => {
     const trimmed = importOrNotesInput.trim();
     if (!trimmed) {
-      setCompileNotice({
-        ok: false,
-        text: 'Paste your notes or JSON first.',
-      });
+      setCompileNotice({ ok: false, text: 'Paste your notes or text first.' });
       return;
     }
-
     try {
       const compiled = compileNotesToCoursePackLocally({
         title: courseCode.trim() || 'My Study Set',
@@ -1081,15 +1078,55 @@ export const CourseCompilerAndAuthModal: React.FC<
       setImportOrNotesInput('');
       setCompileNotice({
         ok: true,
-        text: `Created "${compiled.title}" (${compiled.units.length} Units, ${compiled.nodes.length} concepts).`,
+        text: `Created "${compiled.title}" (${compiled.units.length} Units, ${compiled.nodes.length} concepts) via 0-Token Engine.`,
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
+      setCompileNotice({ ok: false, text: `Build failed: ${msg}` });
+    }
+  };
+
+  const handleBuildOrImportCourse = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = importOrNotesInput.trim();
+    if (!trimmed) {
       setCompileNotice({
         ok: false,
-        text: `Build failed: ${msg}`,
+        text: 'Paste your notes or JSON first.',
       });
+      return;
     }
+
+    // 1. If valid pre-structured JSON with concepts, import directly without re-analyzing
+    const parsed = extractAndParseJSON<DistilledCourseInput>(trimmed);
+    if (parsed && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
+      try {
+        const hydrated = hydrateCoursePack({
+          ...parsed,
+          code: parsed.code || courseCode.trim() || 'COURSE 101',
+          title: parsed.title || courseCode.trim() || 'My Study Set',
+          examTitle: parsed.examTitle || examName.trim() || 'Exam',
+        });
+        onImportCourseJson(hydrated);
+        setImportOrNotesInput('');
+        setCompileNotice({
+          ok: true,
+          text: `✅ Imported "${hydrated.title}" (${hydrated.units.length} Units, ${hydrated.nodes.length} concepts).`,
+        });
+        return;
+      } catch {
+        // fallback to AI analysis
+      }
+    }
+
+    // 2. If AI is connected, deeply analyze all input data!
+    if (aiConnected) {
+      await handleCompileDirectlyWithAI();
+      return;
+    }
+
+    // 3. Fallback to 0-Token Local Compiler
+    handleBuildLocallyOnly();
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1444,21 +1481,34 @@ export const CourseCompilerAndAuthModal: React.FC<
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {aiConnected ? (
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={compilingAI}
-                onClick={handleCompileDirectlyWithAI}
-              >
-                <Sparkles size={14} /> {compilingAI ? 'Synthesizing 80/20 Knowledge Graph...' : `Compile Directly with ${activeAI?.name || 'Connected AI'}`}
-              </button>
+              <>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={compilingAI}
+                  style={{ fontWeight: 700, padding: '10px 14px' }}
+                >
+                  <Sparkles size={15} /> {compilingAI ? 'Analyzing Input & Synthesizing Knowledge Graph...' : `✨ Deep Analyze & Build with ${activeAI?.name || 'Connected AI'}`}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  onClick={handleBuildLocallyOnly}
+                  style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}
+                  title="Skip AI and run fast deterministic offline parser"
+                >
+                  Offline Mode: Compile with 0-Token Local Engine
+                </button>
+              </>
             ) : (
-              <AILock label="Connect AI to compile notes directly in-app" />
+              <>
+                <AILock label="Connect Grok, OpenAI, or Claude for Deep AI Conceptual Analysis" />
+                <button type="submit" className="btn btn-primary" style={{ fontWeight: 700 }}>
+                  Build Locally (0-Token Mode)
+                </button>
+              </>
             )}
             {compilingAI && <div style={{ alignSelf: 'center' }}><TypingDots /></div>}
-            <button type="submit" className="btn btn-sm">
-              Build Locally (0-Token) or Load JSON
-            </button>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
                 type="button"

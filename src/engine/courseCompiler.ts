@@ -7,10 +7,14 @@ export interface DistilledConceptInput {
   statement: string;
   isUnconditionalTruth?: boolean;
   examWeight?: number;
+  prerequisites?: string[];
   motivatedHook?: string;
   keyFormulaOrRule?: string;
   commonMisconceptions?: string[];
   confusableWith?: string;
+  predictionPrompt?: PropositionNode['predictionPrompt'];
+  teachingStep?: PropositionNode['teachingStep'];
+  quizletStages?: PropositionNode['quizletStages'];
 }
 
 export interface DistilledUnitInput {
@@ -208,9 +212,11 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
 
     const isBedrock = item.isUnconditionalTruth ?? (prevInUnit.length === 0);
     const prerequisites: string[] =
-      isBedrock || prevInUnit.length === 0
-        ? []
-        : [prevInUnit[prevInUnit.length - 1].id || `node-${idx}`];
+      Array.isArray(item.prerequisites) && item.prerequisites.length > 0
+        ? item.prerequisites
+        : isBedrock || prevInUnit.length === 0
+          ? []
+          : [prevInUnit[prevInUnit.length - 1].id || `node-${idx}`];
 
     const keywords = extractKeywords(item.statement, item.title);
     const misconceptions = item.commonMisconceptions && item.commonMisconceptions.length > 0
@@ -238,13 +244,13 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
       motivatedHook:
         item.motivatedHook ||
         `Why do we need "${item.title}"? What breaks in our mental model if we ignore this mechanism?`,
-      predictionPrompt: {
+      predictionPrompt: item.predictionPrompt || {
         question: `Before locking in "${item.title}", which core proposition must hold true under exam conditions?`,
         options: [item.statement, distractor1, distractor2, distractor3],
         correctIndex: 0,
         resolution: `Confirmed! ${item.statement}`,
       },
-      teachingStep: {
+      teachingStep: item.teachingStep || {
         coreExplanation: `${item.statement} Because this links directly to ${
           prerequisites.length > 0 ? 'its foundational prerequisite' : 'the unit’s bedrock truth'
         }, you can derive its behavior on any exam question by tracing cause -> mechanism -> outcome.`,
@@ -274,7 +280,7 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
         },
       },
       quizletStages: {
-        recognition: {
+        recognition: item.quizletStages?.recognition || {
           question: `What is the defining proposition and mechanism of "${item.title}"?`,
           options: [
             {
@@ -300,7 +306,7 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
           ],
           correctIndex: 0,
         },
-        discrimination: {
+        discrimination: item.quizletStages?.discrimination || {
           scenario: `On a tricky exam problem testing "${item.title}", an unprepared student confuses it with "${confusable}".`,
           confusableWith: confusable,
           question: `How do you decisively discriminate the true behavior of "${item.title}" from "${confusable}"?`,
@@ -320,7 +326,7 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
           ],
           correctIndex: 0,
         },
-        cuedRecall: {
+        cuedRecall: item.quizletStages?.cuedRecall || {
           prompt: `Without looking at options, state the core proposition and mechanism of "${item.title}".`,
           acceptedKeywords: keywords,
           canonicalAnswer: item.statement,
@@ -333,7 +339,7 @@ export function hydrateCoursePack(input: DistilledCourseInput): CoursePack {
             `R5: Complete answer: ${item.statement}`,
           ],
         },
-        application: {
+        application: item.quizletStages?.application || {
           examProblem: `Apply "${item.title}" to explain what occurs when its primary condition is perturbed, and justify why a common naive shortcut fails.`,
           feynmanPrompt: `Explain "${item.title}" in plain, crystal-clear language as if teaching a classmate 10 minutes before the exam.`,
           requiredMoves: [
