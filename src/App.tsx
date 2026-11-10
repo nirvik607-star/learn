@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { AITutorPanel } from './components/AITutorPanel';
+import { AITutorPanel, useActiveAIProvider } from './components/AITutorPanel';
 import { CelebrationBurst } from './components/CelebrationBurst';
 import {
   detectBridge,
   refineCourseWithAI,
   getActiveAIProvider,
 } from './engine/aiClient';
+import { isCorruptedCoursePack } from './engine/courseCompiler';
 import {
   Gauge,
   Zap,
@@ -124,7 +125,7 @@ export function App() {
   const [burstLabel, setBurstLabel] = useState<string>('');
   const [openUnits, setOpenUnits] = useState<Record<string, boolean>>({});
   const [reanalyzing, setReanalyzing] = useState(false);
-  const activeAI = getActiveAIProvider();
+  const activeAI = useActiveAIProvider();
 
   // Clean 0% Mastery Map (zero pre-filled answers!)
   const [masteryMap, setMasteryMap] = useState<Record<string, NodeMasteryState>>(
@@ -272,14 +273,7 @@ export function App() {
   }, [courses, selectedCourseId]);
 
   const isCorruptedCourse = useMemo(() => {
-    if (!currentCourse || !currentCourse.nodes || currentCourse.nodes.length === 0) return false;
-    const firstTitle = (currentCourse.nodes[0]?.title || '').replace(/["'{}[\]]/g, '').trim().toLowerCase();
-    if (firstTitle === 'code' || firstTitle === 'id') return true;
-    const schemaMatches = currentCourse.nodes.filter((n) => {
-      const clean = (n.title || '').replace(/["'{}[\]]/g, '').trim().toLowerCase();
-      return /^(id|code|title|subtitle|statement|primingsummary|motivatedhook|keyformulaorrule|examweight|units|nodes)$/i.test(clean);
-    }).length;
-    return schemaMatches >= 3;
+    return isCorruptedCoursePack(currentCourse);
   }, [currentCourse]);
 
   const simulatedNow = useMemo(() => {
@@ -459,6 +453,12 @@ export function App() {
 
   const handleReanalyzeWithAI = async () => {
     if (!currentCourse) return;
+    const ai = getActiveAIProvider();
+    if (!ai) {
+      setActiveTab('compiler_and_auth');
+      alert('Please enter your Grok (xAI) or OpenAI key in Setup to re-analyze this set, or click "Delete Corrupted Set".');
+      return;
+    }
     setReanalyzing(true);
     try {
       const refined = await refineCourseWithAI(currentCourse);
@@ -642,6 +642,28 @@ export function App() {
                   >
                     Corrupted Set
                   </span>
+                )}
+                {isCorruptedCourse && (
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={reanalyzing}
+                    onClick={handleReanalyzeWithAI}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      background: 'var(--accent)',
+                      color: '#fff',
+                      border: 'none',
+                    }}
+                    title="Deeply analyze data with AI and reconstruct a clean knowledge graph"
+                  >
+                    <Sparkles size={12} /> {reanalyzing ? 'Fixing with AI...' : `⚡ Fix with ${activeAI?.name || 'Grok'}`}
+                  </button>
                 )}
                 <button
                   type="button"
@@ -874,6 +896,20 @@ export function App() {
                   <Trash2 size={10} /> Delete Set
                 </button>
               </div>
+              {isCorruptedCourse && (
+                <div style={{ padding: '6px 8px', marginBottom: '8px', borderRadius: '6px', background: 'rgba(239, 68, 68, 0.14)', border: '1px solid var(--danger)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--danger)' }}>⚠️ Corrupted schema keys</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-primary"
+                    disabled={reanalyzing}
+                    onClick={handleReanalyzeWithAI}
+                    style={{ fontSize: '0.72rem', padding: '3px 8px', fontWeight: 700 }}
+                  >
+                    <Sparkles size={11} /> {reanalyzing ? 'Fixing...' : `⚡ Fix with ${activeAI?.name || 'Grok'}`}
+                  </button>
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {currentCourse.units.map((u) => {
                   const isOpen = openUnits[u.id] !== false; // open by default
@@ -997,17 +1033,23 @@ export function App() {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '8px', flexShrink: 0, alignItems: 'center' }}>
-                {activeAI && (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    disabled={reanalyzing}
-                    onClick={handleReanalyzeWithAI}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontWeight: 600 }}
-                  >
-                    <Sparkles size={13} /> {reanalyzing ? 'AI Re-Analyzing...' : `⚡ Re-Analyze & Fix with ${activeAI.name}`}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="btn btn-sm btn-primary"
+                  disabled={reanalyzing}
+                  onClick={handleReanalyzeWithAI}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    fontWeight: 700,
+                    background: 'var(--accent)',
+                    color: '#fff',
+                    padding: '6px 12px',
+                  }}
+                >
+                  <Sparkles size={13} /> {reanalyzing ? 'AI Re-Analyzing...' : `⚡ Re-Analyze & Fix with ${activeAI?.name || 'Grok (xAI)'}`}
+                </button>
                 <button
                   type="button"
                   className="btn btn-sm"
@@ -1271,6 +1313,10 @@ export function App() {
             }
             studyContext={studyContext}
             onConnect={() => setActiveTab('compiler_and_auth')}
+            isCorruptedCourse={isCorruptedCourse}
+            onReanalyzeCourse={handleReanalyzeWithAI}
+            onDeleteCourse={() => currentCourse && handleDeleteCourse(currentCourse.id, true)}
+            reanalyzing={reanalyzing}
           />
         </aside>
       </div>

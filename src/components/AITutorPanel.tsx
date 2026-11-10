@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Bot, Lock, Send, ShieldAlert, Sparkles, RotateCcw } from 'lucide-react';
+import { Bot, Lock, Send, ShieldAlert, Sparkles, RotateCcw, Trash2 } from 'lucide-react';
 import type { PropositionNode } from '../types/harness';
-import { isAIConnected, getActiveAIProvider, socraticTurn, type ChatMessage } from '../engine/aiClient';
+import { isAIConnected, getActiveAIProvider, socraticTurn, type ChatMessage, type ActiveAIProvider } from '../engine/aiClient';
+import { JSON_KEY_BLACKLIST } from '../engine/courseCompiler';
 
 export function useAIConnected(): boolean {
   const [connected, setConnected] = useState(isAIConnected());
@@ -16,6 +17,20 @@ export function useAIConnected(): boolean {
     };
   }, []);
   return connected;
+}
+
+export function useActiveAIProvider(): ActiveAIProvider | null {
+  const [provider, setProvider] = useState<ActiveAIProvider | null>(() => getActiveAIProvider());
+  useEffect(() => {
+    const update = () => setProvider(getActiveAIProvider());
+    window.addEventListener('lh-ai-status', update);
+    window.addEventListener('storage', update);
+    return () => {
+      window.removeEventListener('lh-ai-status', update);
+      window.removeEventListener('storage', update);
+    };
+  }, []);
+  return provider;
 }
 
 export const AILock: React.FC<{ label?: string; onConnect?: () => void }> = ({ label = 'Connect AI to unlock', onConnect }) => (
@@ -37,12 +52,24 @@ interface AITutorPanelProps {
   /** Live context from the current study surface (question on screen, learner's answer). */
   studyContext?: string;
   onConnect: () => void;
+  isCorruptedCourse?: boolean;
+  onReanalyzeCourse?: () => void;
+  onDeleteCourse?: () => void;
+  reanalyzing?: boolean;
 }
 
 /** Persistent Obsidian-style right pane: multi-turn Socratic tutor anchored to the focused node. */
-export const AITutorPanel: React.FC<AITutorPanelProps> = ({ node, studyContext = '', onConnect }) => {
+export const AITutorPanel: React.FC<AITutorPanelProps> = ({
+  node,
+  studyContext = '',
+  onConnect,
+  isCorruptedCourse = false,
+  onReanalyzeCourse,
+  onDeleteCourse,
+  reanalyzing = false,
+}) => {
   const connected = useAIConnected();
-  const activeProvider = getActiveAIProvider();
+  const activeProvider = useActiveAIProvider();
   const [persona, setPersona] = useState<'socratic' | 'strict_examiner'>('socratic');
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -89,6 +116,14 @@ export const AITutorPanel: React.FC<AITutorPanelProps> = ({ node, studyContext =
       ]
     : [];
 
+  const isNodeSchemaKey = Boolean(
+    node &&
+      (JSON_KEY_BLACKLIST.has(node.title.replace(/["'{}[\]]/g, '').trim().toLowerCase()) ||
+        /^(id|code|title|subtitle|statement|primingsummary|motivatedhook|keyformulaorrule|examweight|units|nodes)$/i.test(
+          node.title.replace(/["'{}[\]]/g, '').trim().toLowerCase()
+        ))
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -128,6 +163,57 @@ export const AITutorPanel: React.FC<AITutorPanelProps> = ({ node, studyContext =
       </div>
 
       <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {(isCorruptedCourse || isNodeSchemaKey) && (
+          <div
+            style={{
+              padding: '12px',
+              borderRadius: '8px',
+              background: 'rgba(139, 92, 246, 0.16)',
+              border: '1px solid var(--accent-primary)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '8px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Sparkles size={14} style={{ color: 'var(--accent-primary)' }} />
+              <span style={{ fontWeight: 700, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                Corrupted Study Set Detected
+              </span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+              This card is a raw schema key (<code>&quot;{node?.title || 'id'}&quot;</code>). Grok can analyze your material and build a clean 80/20 knowledge graph.
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                type="button"
+                className="btn btn-sm btn-primary"
+                disabled={reanalyzing}
+                onClick={onReanalyzeCourse}
+                style={{ flex: 1, fontSize: '0.75rem', fontWeight: 700 }}
+              >
+                <Sparkles size={12} /> {reanalyzing ? 'Fixing...' : `⚡ Fix with ${activeProvider?.name || 'Grok'}`}
+              </button>
+              {onDeleteCourse && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={onDeleteCourse}
+                  style={{
+                    background: 'var(--danger)',
+                    color: '#fff',
+                    border: 'none',
+                    fontSize: '0.75rem',
+                    padding: '4px 8px',
+                  }}
+                  title="Delete this corrupted set"
+                >
+                  <Trash2 size={12} /> Delete
+                </button>
+              )}
+            </div>
+          </div>
+        )}
         {!connected && <AILock label="0-token mode. Connect AI for a live tutor" onConnect={onConnect} />}
         {history.length === 0 && node && (
           <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
