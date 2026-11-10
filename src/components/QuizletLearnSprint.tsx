@@ -451,7 +451,7 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
           ? `State the exact causal chain without buzzwords: ${node.quizletStages.application.feynmanPrompt}`
           : `Connect your reasoning "${thinkingTrace || freeAnswer || 'step 1'}" to the core idea: ${node.quizletStages.cuedRecall.hints[2]}`)
     );
-    setAiCoachProvider(reply ? 'Live AI' : '0-token local');
+    setAiCoachProvider(reply ? 'Live AI' : 'Cognitive Rubric');
     setAiCoachLoading(false);
   };
 
@@ -916,7 +916,7 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
             {!submitted && (
               <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
                 <button type="submit" className="btn btn-primary">
-                  <CheckCircle2 size={16} /> Check Answer (0-Token Rubric Grader)
+                  <CheckCircle2 size={16} /> Check Answer (Cognitive Rubric Grader)
                 </button>
                 <button
                   type="button"

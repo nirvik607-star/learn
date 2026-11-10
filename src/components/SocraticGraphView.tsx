@@ -250,7 +250,7 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
         const data = await res.json();
         setTutorReply({
           reply: data.reply || data.message || activeNode.teachingStep.coreExplanation,
-          providerUsed: data.provider || data.providerUsed || '0-Token Local Coach',
+          providerUsed: data.provider || data.providerUsed || 'Socratic Coach',
           cachedOrZeroToken: Boolean(data.cachedOrZeroToken ?? true),
         });
       } else {
@@ -262,7 +262,7 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
           tutorPersona === 'strict_examiner'
             ? `[Strict Examiner]: State the exact causal chain for "${activeNode.title}" without buzzwords: ${activeNode.quizletStages.application.feynmanPrompt}`
             : `[Socratic Coach]: Focus on the key clue: ${activeNode.quizletStages.cuedRecall.hints[2]}`,
-        providerUsed: '0-Token Local Coach',
+        providerUsed: 'Socratic Coach',
         cachedOrZeroToken: true,
       });
     } finally {
@@ -1018,7 +1018,7 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
                       <span className="badge badge-accent">{tutorReply.providerUsed}</span>
                       {tutorReply.cachedOrZeroToken && (
-                        <span className="badge badge-success">0-Token Instant</span>
+                        <span className="badge badge-success">Socratic Guidance</span>
                       )}
                     </div>
                     <div style={{ whiteSpace: 'pre-wrap' }}>{tutorReply.reply}</div>
