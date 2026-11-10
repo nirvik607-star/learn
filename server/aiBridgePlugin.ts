@@ -210,6 +210,17 @@ export function apexLearnAiBridgePlugin(): Plugin {
         return next();
       }
 
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+
+      if (req.method === 'OPTIONS') {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+
       const urlObj = new URL(req.url, 'http://localhost');
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
 

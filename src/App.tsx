@@ -4,13 +4,15 @@ import {
   Zap,
   Network,
   AlertTriangle,
-  Cpu,
   Sun,
   Moon,
   Timer,
   Pause,
   Play,
   RotateCcw,
+  Compass,
+  Bot,
+  Sparkles,
 } from 'lucide-react';
 import type {
   CoursePack,
@@ -32,6 +34,10 @@ import { QuizletLearnSprint } from './components/QuizletLearnSprint';
 import { SocraticGraphView } from './components/SocraticGraphView';
 import { MistakeNotebookAndCram } from './components/MistakeNotebookAndCram';
 import { CourseCompilerAndAuthModal } from './components/CourseCompilerAndAuthModal';
+import {
+  SpotlightTutorialOverlay,
+  type TutorialStep,
+} from './components/SpotlightTutorialOverlay';
 
 type ActiveTab =
   | 'command_center'
@@ -40,122 +46,32 @@ type ActiveTab =
   | 'mistakes_and_cram'
   | 'compiler_and_auth';
 
+// Clean v4 storage keys ensure zero pre-filled legacy data on GitHub Pages
 const STORAGE_KEYS = {
-  COURSES: 'learnharness_pro_courses_v2',
-  MASTERY: 'learnharness_pro_mastery_v2',
-  MISTAKES: 'learnharness_pro_mistakes_v2',
-  THEME: 'learnharness_pro_theme_v2',
+  COURSES: 'learnharness_pro_clean_v4_courses',
+  MASTERY: 'learnharness_pro_clean_v4_mastery',
+  MISTAKES: 'learnharness_pro_clean_v4_mistakes',
+  THEME: 'learnharness_pro_clean_v4_theme',
+  TOUR_SEEN: 'learnharness_pro_clean_v4_tour_seen',
 };
 
-function buildInitialSeedMastery(
-  courses: CoursePack[]
-): Record<string, NodeMasteryState> {
-  const map: Record<string, NodeMasteryState> = {};
-  const now = Date.now();
-  courses.forEach((course, cIdx) => {
-    course.nodes.forEach((node, nIdx) => {
-      const base = createInitialNodeState(node.id);
-      if (cIdx === 0) {
-        if (nIdx === 0) {
-          map[node.id] = {
-            ...base,
-            tier: 3,
-            stabilityHours: 64,
-            lastReviewedAt: now - 3 * 3600 * 1000,
-            attempts: 4,
-            correctStreak: 4,
-            unaidedSuccesses: 3,
-            confidenceHistory: [
-              { confidence: 85, correct: true, timestamp: now - 5 * 3600 * 1000 },
-              { confidence: 92, correct: true, timestamp: now - 3 * 3600 * 1000 },
-            ],
-            probeBracket: 'floor_held',
-          };
-          return;
-        }
-        if (nIdx === 1 || nIdx === 4) {
-          map[node.id] = {
-            ...base,
-            tier: 2,
-            stabilityHours: 32,
-            lastReviewedAt: now - 6 * 3600 * 1000,
-            attempts: 3,
-            correctStreak: 2,
-            unaidedSuccesses: 2,
-            confidenceHistory: [
-              { confidence: 80, correct: true, timestamp: now - 6 * 3600 * 1000 },
-            ],
-            probeBracket: 'floor_held',
-          };
-          return;
-        }
-        if (nIdx === 2 || nIdx === 5) {
-          map[node.id] = {
-            ...base,
-            tier: 1,
-            stabilityHours: 18,
-            lastReviewedAt: now - 12 * 3600 * 1000,
-            attempts: 2,
-            correctStreak: 1,
-            unaidedSuccesses: 1,
-            confidenceHistory: [
-              { confidence: 75, correct: true, timestamp: now - 12 * 3600 * 1000 },
-            ],
-            probeBracket: 'edge_target',
-          };
-          return;
-        }
-      }
-      map[node.id] = base;
-    });
-  });
-  return map;
-}
-
-function buildInitialSeedMistakes(courses: CoursePack[]): MistakeRecord[] {
-  const firstCourse = courses[0];
-  if (!firstCourse || firstCourse.nodes.length < 3) return [];
-  const targetNode = firstCourse.nodes[2];
-  return [
-    {
-      id: 'seed-mistake-1',
-      courseId: firstCourse.id,
-      unitId: targetNode.unitId,
-      nodeId: targetNode.id,
-      nodeTitle: targetNode.title,
-      timestamp: Date.now() - 4 * 3600 * 1000,
-      stage: 'discrimination',
-      failureCategory: 'discrimination_error',
-      question:
-        'Why must future token logits be masked to -infinity BEFORE softmax rather than zeroing probabilities AFTER softmax?',
-      learnerAnswer:
-        'Zeroing after softmax is equivalent as long as we re-normalize later.',
-      learnerThinking: 'Thought softmax denominator was unaffected.',
-      confidence: 85,
-      correctTarget: targetNode.statement,
-      surgicalRepair:
-        'Masking to -infinity BEFORE softmax ensures exp(-infinity) = 0 so future tokens never leak into the softmax normalization denominator.',
-      retestedAndCleared: false,
-    },
-  ];
-}
-
 export function App() {
+  // Starts with an empty course list (0 pre-filled data!) unless the user already imported their own class in v4
   const [courses, setCourses] = useState<CoursePack[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.COURSES);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed)) return parsed;
       }
     } catch {
       // Fallback
     }
-    return DEFAULT_COURSES;
+    return [];
   });
 
   const [selectedCourseId, setSelectedCourseId] = useState<string>(
-    courses[0]?.id || DEFAULT_COURSES[0].id
+    courses[0]?.id || ''
   );
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [sprintFocusNodeId, setSprintFocusNodeId] = useState<string | null>(null);
@@ -164,12 +80,16 @@ export function App() {
     'graph_and_teach' | 'diagnostic_probe'
   >('graph_and_teach');
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('command_center');
+  // If no course is loaded yet, open directly on the Agent Class Harvester & OpenAI Auth Setup tab
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    courses.length > 0 ? 'command_center' : 'compiler_and_auth'
+  );
   const [mistakeSubTab, setMistakeSubTab] = useState<'mistakes' | 'cram_sheet'>(
     'mistakes'
   );
   const [simulatedHoursOffset, setSimulatedHoursOffset] = useState<number>(0);
 
+  // Clean 0% Mastery Map (zero pre-filled answers!)
   const [masteryMap, setMasteryMap] = useState<Record<string, NodeMasteryState>>(
     () => {
       try {
@@ -178,10 +98,11 @@ export function App() {
       } catch {
         // Fallback
       }
-      return buildInitialSeedMastery(DEFAULT_COURSES);
+      return {};
     }
   );
 
+  // Clean 0-Mistake Log (zero pre-filled mistakes!)
   const [mistakes, setMistakes] = useState<MistakeRecord[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.MISTAKES);
@@ -189,8 +110,18 @@ export function App() {
     } catch {
       // Fallback
     }
-    return buildInitialSeedMistakes(DEFAULT_COURSES);
+    return [];
   });
+
+  // Spotlight Tutorial Overlay State (automatically opens on first visit!)
+  const [isTutorialOpen, setIsTutorialOpen] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(STORAGE_KEYS.TOUR_SEEN) !== 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [tutorialStepIndex, setTutorialStepIndex] = useState<number>(0);
 
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
     try {
@@ -209,16 +140,16 @@ export function App() {
 
   // AI Provider Bridge status
   const [aiStatus, setAiStatus] = useState<AIProviderStatus>({
-    activeProvider: 'zero-token-local',
+    activeProvider: 'chatgpt-oauth',
     codexCliAvailable: false,
     claudeCliAvailable: false,
     chatgptOAuthConnected: false,
     openaiKeyConfigured: false,
     anthropicKeyConfigured: false,
     tokenStats: {
-      localZeroTokenActions: 14,
+      localZeroTokenActions: 0,
       aiAssistedActions: 0,
-      estimatedTokensSaved: 18400,
+      estimatedTokensSaved: 0,
       estimatedApiCostUsd: 0,
     },
   });
@@ -264,7 +195,7 @@ export function App() {
         setAiStatus(data);
       }
     } catch {
-      // Offline / static fallback
+      // Offline / static GitHub Pages fallback
     }
   };
 
@@ -292,12 +223,9 @@ export function App() {
     return () => window.clearInterval(id);
   }, [timerRunning, timerMode]);
 
-  const currentCourse = useMemo(() => {
-    return (
-      courses.find((c) => c.id === selectedCourseId) ||
-      courses[0] ||
-      DEFAULT_COURSES[0]
-    );
+  const currentCourse: CoursePack | null = useMemo(() => {
+    if (courses.length === 0) return null;
+    return courses.find((c) => c.id === selectedCourseId) || courses[0];
   }, [courses, selectedCourseId]);
 
   const simulatedNow = useMemo(() => {
@@ -305,6 +233,7 @@ export function App() {
   }, [simulatedHoursOffset, masteryMap]);
 
   const readinessReport = useMemo(() => {
+    if (!currentCourse) return null;
     return computeCourseReadiness(
       currentCourse,
       masteryMap,
@@ -314,10 +243,11 @@ export function App() {
   }, [currentCourse, masteryMap, mistakes, simulatedNow]);
 
   const openMistakesCount = useMemo(() => {
+    if (!currentCourse) return 0;
     return mistakes.filter(
       (m) => m.courseId === currentCourse.id && !m.retestedAndCleared
     ).length;
-  }, [mistakes, currentCourse.id]);
+  }, [mistakes, currentCourse]);
 
   // Record attempt from QuizletLearnSprint
   const handleRecordSprintAttempt = (params: {
@@ -349,7 +279,7 @@ export function App() {
       [params.nodeId]: result.nextState,
     }));
 
-    if (!params.correct || params.hintRungUsed >= 3) {
+    if (currentCourse && (!params.correct || params.hintRungUsed >= 3)) {
       const stageMap: Record<
         QuizletRoundItem['itemType'],
         MistakeRecord['stage']
@@ -380,7 +310,6 @@ export function App() {
       };
       setMistakes((prev) => [newMistake, ...prev]);
     } else if (params.correct && params.hintRungUsed <= 1) {
-      // Clear any unresolved mistake for this node when solved unaided!
       setMistakes((prev) =>
         prev.map((m) =>
           m.nodeId === params.nodeId ? { ...m, retestedAndCleared: true } : m
@@ -409,52 +338,59 @@ export function App() {
     }));
   };
 
-  const handleResetCourseProgress = (courseId: string) => {
-    const target = courses.find((c) => c.id === courseId);
-    if (!target) return;
+  const handleLoadOptionalSampleCourse = () => {
+    const sample = DEFAULT_COURSES[0];
+    setCourses((prev) => [
+      sample,
+      ...prev.filter((c) => c.id !== sample.id),
+    ]);
     setMasteryMap((prev) => {
       const next = { ...prev };
-      target.nodes.forEach((n) => {
-        next[n.id] = createInitialNodeState(n.id);
+      sample.nodes.forEach((n) => {
+        next[n.id] = createInitialNodeState(n.id); // 0% clean progress!
       });
       return next;
     });
-    setMistakes((prev) => prev.filter((m) => m.courseId !== courseId));
-    setSimulatedHoursOffset(0);
+    setSelectedCourseId(sample.id);
+    setSelectedUnitId(null);
+    setActiveTab('command_center');
   };
 
-  const handleFastTrackEntireCourseDemo = (courseId: string) => {
-    const target = courses.find((c) => c.id === courseId);
-    if (!target) return;
-    const now = Date.now();
-    setMasteryMap((prev) => {
-      const next = { ...prev };
-      target.nodes.forEach((n, idx) => {
-        next[n.id] = {
-          nodeId: n.id,
-          tier: (idx % 6 === 0 ? 2 : 3) as MasteryTier,
-          stabilityHours: 96,
-          lastReviewedAt: now - 1 * 3600 * 1000,
-          attempts: 4,
-          correctStreak: 4,
-          unaidedSuccesses: 3,
-          hintedSuccesses: 1,
-          maxHintRungUsed: 0,
-          confidenceHistory: [
-            { confidence: 90, correct: true, timestamp: now - 3600 * 1000 },
-          ],
-          probeBracket: 'floor_held',
-          thinkingNotes: [],
-        };
-      });
-      return next;
-    });
-    setMistakes((prev) =>
-      prev.map((m) =>
-        m.courseId === courseId ? { ...m, retestedAndCleared: true } : m
-      )
-    );
-    setSimulatedHoursOffset(0);
+  const handleClearAllData = () => {
+    setCourses([]);
+    setMasteryMap({});
+    setMistakes([]);
+    setSelectedCourseId('');
+    setSelectedUnitId(null);
+    setActiveTab('compiler_and_auth');
+    try {
+      localStorage.removeItem(STORAGE_KEYS.COURSES);
+      localStorage.removeItem(STORAGE_KEYS.MASTERY);
+      localStorage.removeItem(STORAGE_KEYS.MISTAKES);
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleTutorialStepChange = (
+    newIdx: number,
+    reqTab: TutorialStep['requiredTab']
+  ) => {
+    setTutorialStepIndex(newIdx);
+    if (reqTab === 'agent_setup') {
+      setActiveTab('compiler_and_auth');
+    } else {
+      setActiveTab(reqTab);
+    }
+  };
+
+  const handleCloseTutorial = () => {
+    setIsTutorialOpen(false);
+    try {
+      localStorage.setItem(STORAGE_KEYS.TOUR_SEEN, 'true');
+    } catch {
+      // Ignore
+    }
   };
 
   const formatTimer = (secs: number) => {
@@ -465,6 +401,14 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {/* Interactive Dimmed-Screen Spotlight Tutorial Overlay with Bright Circles & Curved Arrows */}
+      <SpotlightTutorialOverlay
+        isOpen={isTutorialOpen}
+        stepIndex={tutorialStepIndex}
+        onChangeStep={handleTutorialStepChange}
+        onClose={handleCloseTutorial}
+      />
+
       {/* Top Academic Studio Bar */}
       <header className="top-nav">
         <div className="top-nav-inner">
@@ -478,7 +422,11 @@ export function App() {
             }}
           >
             <div
-              onClick={() => setActiveTab('command_center')}
+              onClick={() =>
+                setActiveTab(
+                  currentCourse ? 'command_center' : 'compiler_and_auth'
+                )
+              }
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -523,100 +471,125 @@ export function App() {
               </div>
             </div>
 
-            <select
-              className="input"
-              style={{
-                width: 'auto',
-                maxWidth: '300px',
-                padding: '6px 10px',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-              }}
-              value={currentCourse.id}
-              onChange={(e) => {
-                setSelectedCourseId(e.target.value);
-                setSelectedUnitId(null);
-                setSprintFocusNodeId(null);
-              }}
-            >
-              {courses.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.title}
-                </option>
-              ))}
-            </select>
+            {courses.length > 0 && currentCourse && (
+              <select
+                className="input"
+                style={{
+                  width: 'auto',
+                  maxWidth: '280px',
+                  padding: '6px 10px',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                }}
+                value={currentCourse.id}
+                onChange={(e) => {
+                  setSelectedCourseId(e.target.value);
+                  setSelectedUnitId(null);
+                  setSprintFocusNodeId(null);
+                }}
+              >
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Primary Mode Navigation */}
           <nav className="nav-tabs">
             <button
               className={`nav-tab ${
+                activeTab === 'compiler_and_auth' ? 'active' : ''
+              }`}
+              onClick={() => setActiveTab('compiler_and_auth')}
+            >
+              <Bot size={15} />
+              1. Agent Class Setup & OpenAI Auth
+            </button>
+
+            <button
+              data-tour-id="tour-nav-readiness"
+              className={`nav-tab ${
                 activeTab === 'command_center' ? 'active' : ''
               }`}
               onClick={() => setActiveTab('command_center')}
             >
               <Gauge size={15} />
-              Readiness ({readinessReport.overallScore}% ·{' '}
-              {readinessReport.letterGradePrediction})
+              Readiness (
+              {readinessReport
+                ? `${readinessReport.overallScore}% · ${readinessReport.letterGradePrediction}`
+                : '0%'}
+              )
             </button>
-            <button
-              className={`nav-tab ${
-                activeTab === 'quizlet_sprint' ? 'active' : ''
-              }`}
-              onClick={() => setActiveTab('quizlet_sprint')}
+
+            <div
+              data-tour-id="tour-nav-modes"
+              style={{ display: 'inline-flex', gap: '4px', flexWrap: 'wrap' }}
             >
-              <Zap size={15} />
-              Quizlet Learn Sprint
-            </button>
-            <button
-              className={`nav-tab ${
-                activeTab === 'socratic_graph' ? 'active' : ''
-              }`}
-              onClick={() => setActiveTab('socratic_graph')}
-            >
-              <Network size={15} />
-              Socratic Graph & Probe
-            </button>
-            <button
-              className={`nav-tab ${
-                activeTab === 'mistakes_and_cram' ? 'active' : ''
-              }`}
-              onClick={() => {
-                setMistakeSubTab('mistakes');
-                setActiveTab('mistakes_and_cram');
-              }}
-            >
-              <AlertTriangle size={15} />
-              Mistakes & 80/20 Cram
-              {openMistakesCount > 0 && (
-                <span
-                  className="mono"
-                  style={{
-                    padding: '1px 6px',
-                    borderRadius: '4px',
-                    background: 'var(--danger-subtle)',
-                    color: 'var(--danger)',
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                  }}
-                >
-                  {openMistakesCount}
-                </span>
-              )}
-            </button>
-            <button
-              className={`nav-tab ${
-                activeTab === 'compiler_and_auth' ? 'active' : ''
-              }`}
-              onClick={() => setActiveTab('compiler_and_auth')}
-            >
-              <Cpu size={15} />
-              Compile & Auth
-            </button>
+              <button
+                className={`nav-tab ${
+                  activeTab === 'quizlet_sprint' ? 'active' : ''
+                }`}
+                onClick={() => setActiveTab('quizlet_sprint')}
+              >
+                <Zap size={15} />
+                Quizlet Learn Sprint
+              </button>
+              <button
+                className={`nav-tab ${
+                  activeTab === 'socratic_graph' ? 'active' : ''
+                }`}
+                onClick={() => setActiveTab('socratic_graph')}
+              >
+                <Network size={15} />
+                Socratic Graph & Probe
+              </button>
+              <button
+                className={`nav-tab ${
+                  activeTab === 'mistakes_and_cram' ? 'active' : ''
+                }`}
+                onClick={() => {
+                  setMistakeSubTab('mistakes');
+                  setActiveTab('mistakes_and_cram');
+                }}
+              >
+                <AlertTriangle size={15} />
+                Mistakes & 80/20 Cram
+                {openMistakesCount > 0 && (
+                  <span
+                    className="mono"
+                    style={{
+                      padding: '1px 6px',
+                      borderRadius: '4px',
+                      background: 'var(--danger-subtle)',
+                      color: 'var(--danger)',
+                      fontSize: '0.7rem',
+                      fontWeight: 700,
+                    }}
+                  >
+                    {openMistakesCount}
+                  </span>
+                )}
+              </button>
+            </div>
           </nav>
 
-          {/* Right Controls: Focus / 2-Min NSDR Rest Timer + Theme */}
+          {/* Right Controls: Interactive Spotlight Tutorial Button + Focus / NSDR Timer + Theme */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={() => {
+                setTutorialStepIndex(0);
+                setActiveTab('compiler_and_auth');
+                setIsTutorialOpen(true);
+              }}
+              title="Open Interactive Dimmed-Screen Tutorial with Arrows & Bright Circles"
+            >
+              <Compass size={14} /> Tutorial
+            </button>
+
             <div
               style={{
                 display: 'inline-flex',
@@ -628,7 +601,7 @@ export function App() {
                 border: '1px solid var(--border-subtle)',
                 fontSize: '0.78rem',
               }}
-              title="Ultradian Focus Block + 2-Minute NSDR (Non-Sleep Deep Rest) Memory Consolidation Timer"
+              title="Ultradian Focus Block + 2-Minute NSDR Consolidation Timer"
             >
               <Timer
                 size={14}
@@ -709,130 +682,7 @@ export function App() {
 
       {/* Main Content Container */}
       <main className="main-container">
-        {activeTab === 'command_center' && (
-          <ReadinessCommandCenter
-            course={currentCourse}
-            report={readinessReport}
-            masteryMap={masteryMap}
-            onStartQuizletSprint={(unitId, focusNodeId) => {
-              if (unitId && unitId !== 'all') {
-                setSelectedUnitId(unitId);
-              } else {
-                setSelectedUnitId(null);
-              }
-              setSprintFocusNodeId(focusNodeId || null);
-              setActiveTab('quizlet_sprint');
-            }}
-            onOpenSocraticNode={(nodeId, startProbe) => {
-              setSocraticNodeId(nodeId);
-              setSocraticSubMode(
-                startProbe ? 'diagnostic_probe' : 'graph_and_teach'
-              );
-              setActiveTab('socratic_graph');
-            }}
-            onOpenMistakeDrill={() => {
-              setMistakeSubTab('mistakes');
-              setActiveTab('mistakes_and_cram');
-            }}
-            onOpenCramSheet={() => {
-              setMistakeSubTab('cram_sheet');
-              setActiveTab('mistakes_and_cram');
-            }}
-            onFastForwardDecayDemo={() => {
-              setSimulatedHoursOffset((prev) => (prev === 0 ? 48 : 0));
-            }}
-          />
-        )}
-
-        {activeTab === 'quizlet_sprint' && (
-          <QuizletLearnSprint
-            course={currentCourse}
-            report={readinessReport}
-            masteryMap={masteryMap}
-            mistakes={mistakes}
-            initialUnitFilter={selectedUnitId || 'all'}
-            focusNodeId={sprintFocusNodeId}
-            onRecordAttempt={handleRecordSprintAttempt}
-            onBackToDashboard={() => setActiveTab('command_center')}
-            onLocalZeroTokenTick={() => {
-              setAiStatus((prev) => ({
-                ...prev,
-                tokenStats: {
-                  ...prev.tokenStats,
-                  localZeroTokenActions:
-                    prev.tokenStats.localZeroTokenActions + 1,
-                  estimatedTokensSaved:
-                    prev.tokenStats.estimatedTokensSaved + 850,
-                },
-              }));
-            }}
-          />
-        )}
-
-        {activeTab === 'socratic_graph' && (
-          <SocraticGraphView
-            course={currentCourse}
-            masteryMap={masteryMap}
-            selectedUnitId={selectedUnitId}
-            initialNodeId={socraticNodeId}
-            initialSubMode={socraticSubMode}
-            onSelectUnit={(u) => setSelectedUnitId(u)}
-            onFastTrackNode={handleFastTrackNode}
-            onPracticeSingleNode={(nodeId) => {
-              setSprintFocusNodeId(nodeId);
-              setActiveTab('quizlet_sprint');
-            }}
-          />
-        )}
-
-        {activeTab === 'mistakes_and_cram' && (
-          <MistakeNotebookAndCram
-            course={currentCourse}
-            mistakes={mistakes}
-            readiness={readinessReport}
-            initialTab={mistakeSubTab}
-            onStartMistakeDrill={() => {
-              setSprintFocusNodeId(null);
-              setActiveTab('quizlet_sprint');
-            }}
-            onResolveMistake={(mistakeId) =>
-              setMistakes((prev) =>
-                prev.map((m) =>
-                  m.id === mistakeId ? { ...m, retestedAndCleared: true } : m
-                )
-              )
-            }
-            onAddManualMistake={(
-              nodeId,
-              questionPrompt,
-              learnerAnswer,
-              failureType
-            ) => {
-              const node = currentCourse.nodes.find((n) => n.id === nodeId);
-              if (!node) return;
-              const newMistake: MistakeRecord = {
-                id: `manual-${Date.now()}`,
-                courseId: currentCourse.id,
-                unitId: node.unitId,
-                nodeId: node.id,
-                nodeTitle: node.title,
-                timestamp: Date.now(),
-                stage: 'application',
-                failureCategory: failureType,
-                question: questionPrompt,
-                learnerAnswer,
-                learnerThinking: '',
-                confidence: 75,
-                correctTarget: node.statement,
-                surgicalRepair: node.statement,
-                retestedAndCleared: false,
-              };
-              setMistakes((prev) => [newMistake, ...prev]);
-            }}
-          />
-        )}
-
-        {activeTab === 'compiler_and_auth' && (
+        {activeTab === 'compiler_and_auth' ? (
           <CourseCompilerAndAuthModal
             course={currentCourse}
             allCourses={courses}
@@ -859,7 +709,7 @@ export function App() {
               setMasteryMap((prev) => {
                 const next = { ...prev };
                 imported.nodes.forEach((n) => {
-                  if (!next[n.id]) next[n.id] = createInitialNodeState(n.id);
+                  next[n.id] = createInitialNodeState(n.id);
                 });
                 return next;
               });
@@ -867,9 +717,183 @@ export function App() {
               setSelectedUnitId(null);
               setActiveTab('command_center');
             }}
-            onResetCourseProgress={handleResetCourseProgress}
-            onFastTrackEntireCourseDemo={handleFastTrackEntireCourseDemo}
+            onLoadOptionalSampleCourse={handleLoadOptionalSampleCourse}
+            onClearAllCoursesAndReset={handleClearAllData}
+            onOpenSpotlightTutorial={() => {
+              setTutorialStepIndex(0);
+              setIsTutorialOpen(true);
+            }}
           />
+        ) : !currentCourse || !readinessReport ? (
+          /* Clean Empty State When User Clicks a Study Tab Before Importing Their Class */
+          <div
+            className="card"
+            style={{
+              padding: '44px 28px',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: '14px',
+            }}
+          >
+            <Bot size={42} style={{ color: 'var(--accent-primary)' }} />
+            <h2 className="serif-heading" style={{ fontSize: '1.6rem' }}>
+              Your Workspace Is 100% Clean — Ready for Your Class Materials
+            </h2>
+            <p
+              style={{
+                maxWidth: '580px',
+                color: 'var(--text-secondary)',
+                fontSize: '0.92rem',
+              }}
+            >
+              No pre-filled courses or fake scores. Use the{' '}
+              <strong>Agent Class Setup & OpenAI Auth</strong> tab to have OpenAI
+              Codex, ChatGPT, or Claude build your custom course pack from your
+              lecture slides & exams—or load a clean 0% sample course to test the
+              study tools first.
+            </p>
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '6px' }}>
+              <button
+                className="btn btn-primary"
+                onClick={() => setActiveTab('compiler_and_auth')}
+              >
+                <Bot size={15} /> Go to Agent Class Setup & OpenAI Auth
+              </button>
+              <button
+                className="btn"
+                onClick={handleLoadOptionalSampleCourse}
+              >
+                <Sparkles size={15} /> Load Optional Sample Course (0% Clean Progress)
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {activeTab === 'command_center' && (
+              <ReadinessCommandCenter
+                course={currentCourse}
+                report={readinessReport}
+                masteryMap={masteryMap}
+                onStartQuizletSprint={(unitId, focusNodeId) => {
+                  if (unitId && unitId !== 'all') {
+                    setSelectedUnitId(unitId);
+                  } else {
+                    setSelectedUnitId(null);
+                  }
+                  setSprintFocusNodeId(focusNodeId || null);
+                  setActiveTab('quizlet_sprint');
+                }}
+                onOpenSocraticNode={(nodeId, startProbe) => {
+                  setSocraticNodeId(nodeId);
+                  setSocraticSubMode(
+                    startProbe ? 'diagnostic_probe' : 'graph_and_teach'
+                  );
+                  setActiveTab('socratic_graph');
+                }}
+                onOpenMistakeDrill={() => {
+                  setMistakeSubTab('mistakes');
+                  setActiveTab('mistakes_and_cram');
+                }}
+                onOpenCramSheet={() => {
+                  setMistakeSubTab('cram_sheet');
+                  setActiveTab('mistakes_and_cram');
+                }}
+                onFastForwardDecayDemo={() => {
+                  setSimulatedHoursOffset((prev) => (prev === 0 ? 48 : 0));
+                }}
+              />
+            )}
+
+            {activeTab === 'quizlet_sprint' && (
+              <QuizletLearnSprint
+                course={currentCourse}
+                report={readinessReport}
+                masteryMap={masteryMap}
+                mistakes={mistakes}
+                initialUnitFilter={selectedUnitId || 'all'}
+                focusNodeId={sprintFocusNodeId}
+                onRecordAttempt={handleRecordSprintAttempt}
+                onBackToDashboard={() => setActiveTab('command_center')}
+                onLocalZeroTokenTick={() => {
+                  setAiStatus((prev) => ({
+                    ...prev,
+                    tokenStats: {
+                      ...prev.tokenStats,
+                      localZeroTokenActions:
+                        prev.tokenStats.localZeroTokenActions + 1,
+                      estimatedTokensSaved:
+                        prev.tokenStats.estimatedTokensSaved + 850,
+                    },
+                  }));
+                }}
+              />
+            )}
+
+            {activeTab === 'socratic_graph' && (
+              <SocraticGraphView
+                course={currentCourse}
+                masteryMap={masteryMap}
+                selectedUnitId={selectedUnitId}
+                initialNodeId={socraticNodeId}
+                initialSubMode={socraticSubMode}
+                onSelectUnit={(u) => setSelectedUnitId(u)}
+                onFastTrackNode={handleFastTrackNode}
+                onPracticeSingleNode={(nodeId) => {
+                  setSprintFocusNodeId(nodeId);
+                  setActiveTab('quizlet_sprint');
+                }}
+              />
+            )}
+
+            {activeTab === 'mistakes_and_cram' && (
+              <MistakeNotebookAndCram
+                course={currentCourse}
+                mistakes={mistakes}
+                readiness={readinessReport}
+                initialTab={mistakeSubTab}
+                onStartMistakeDrill={() => {
+                  setSprintFocusNodeId(null);
+                  setActiveTab('quizlet_sprint');
+                }}
+                onResolveMistake={(mistakeId) =>
+                  setMistakes((prev) =>
+                    prev.map((m) =>
+                      m.id === mistakeId ? { ...m, retestedAndCleared: true } : m
+                    )
+                  )
+                }
+                onAddManualMistake={(
+                  nodeId,
+                  questionPrompt,
+                  learnerAnswer,
+                  failureType
+                ) => {
+                  const node = currentCourse.nodes.find((n) => n.id === nodeId);
+                  if (!node) return;
+                  const newMistake: MistakeRecord = {
+                    id: `manual-${Date.now()}`,
+                    courseId: currentCourse.id,
+                    unitId: node.unitId,
+                    nodeId: node.id,
+                    nodeTitle: node.title,
+                    timestamp: Date.now(),
+                    stage: 'application',
+                    failureCategory: failureType,
+                    question: questionPrompt,
+                    learnerAnswer,
+                    learnerThinking: '',
+                    confidence: 75,
+                    correctTarget: node.statement,
+                    surgicalRepair: node.statement,
+                    retestedAndCleared: false,
+                  };
+                  setMistakes((prev) => [newMistake, ...prev]);
+                }}
+              />
+            )}
+          </>
         )}
       </main>
     </div>

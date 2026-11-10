@@ -19,7 +19,6 @@ if (!cssFile || !jsFile) {
 
 const cssContent = fs.readFileSync(path.join(assetsDir, cssFile), 'utf8');
 const rawJsContent = fs.readFileSync(path.join(assetsDir, jsFile), 'utf8');
-// Safely escape closing script tags inside JS string literals
 const safeJsContent = rawJsContent.replace(/<\/script>/gi, '<\\/script>');
 
 const standaloneHtml = `<!doctype html>
@@ -36,72 +35,128 @@ const standaloneHtml = `<!doctype html>
   <body>
     <div id="root"></div>
     <script>
-      // Built-in Client-Side Multi-Auth & 0-Token Socratic Bridge for Standalone HTML Mode
+      // Client-Side OpenAI Account Auth & Local Mac Bridge Router for GitHub Pages / Standalone Mode
       (function() {
         const originalFetch = window.fetch.bind(window);
         let standaloneState = {
-          activeProvider: 'zero-token-local',
+          activeProvider: 'chatgpt-oauth',
           codexCliAvailable: false,
           claudeCliAvailable: false,
           chatgptOAuthConnected: false,
           openaiKeyConfigured: false,
           anthropicKeyConfigured: false,
-          openaiApiKey: '',
-          anthropicApiKey: '',
           tokenStats: {
-            localZeroTokenActions: 18,
+            localZeroTokenActions: 0,
             aiAssistedActions: 0,
-            estimatedTokensSaved: 24500,
+            estimatedTokensSaved: 0,
             estimatedApiCostUsd: 0
           }
         };
 
+        function getStoredOpenAIToken() {
+          try {
+            const raw = (window.localStorage.getItem('lh_openai_account_token') || '').trim();
+            if (raw.startsWith('{')) {
+              const p = JSON.parse(raw);
+              return p.access_token || p.token || p.OPENAI_API_KEY || '';
+            }
+            return raw;
+          } catch (e) {
+            return '';
+          }
+        }
+
         window.fetch = async function(input, init) {
           const url = typeof input === 'string' ? input : (input && input.url) || '';
-          if (url.includes('/api/ai/status')) {
+
+          if (url.endsWith('/api/ai/status')) {
+            const tok = getStoredOpenAIToken();
+            standaloneState.openaiKeyConfigured = tok.length > 12;
+            standaloneState.chatgptOAuthConnected = tok.length > 12;
             return new Response(JSON.stringify(standaloneState), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
             });
           }
-          if (url.includes('/api/ai/configure') && init && init.body) {
-            try {
-              const body = JSON.parse(init.body);
-              if (body.activeProvider) standaloneState.activeProvider = body.activeProvider;
-              if (body.openaiApiKey) {
-                standaloneState.openaiApiKey = body.openaiApiKey;
-                standaloneState.openaiKeyConfigured = true;
-              }
-              if (body.anthropicApiKey) {
-                standaloneState.anthropicApiKey = body.anthropicApiKey;
-                standaloneState.anthropicKeyConfigured = true;
-              }
-            } catch (e) {}
+
+          if (url.includes('/api/ai/configure') || url.includes('/api/ai/config')) {
             return new Response(JSON.stringify({ ok: true, status: standaloneState }), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
             });
           }
-          if (url.includes('/api/ai/oauth/chatgpt/start')) {
-            const authorizeUrl = 'https://auth.openai.com/api/accounts/authorize?client_id=dynamic_agent_client&response_type=code&scope=openid+profile+email+offline_access+resource.invoke+chatgpt.tokens.use.direct';
-            return new Response(JSON.stringify({ authorizeUrl }), {
-              status: 200,
-              headers: { 'Content-Type': 'application/json' }
-            });
-          }
+
           if (url.includes('/api/ai/tutor') && init && init.body) {
             try {
               const body = JSON.parse(init.body);
-              standaloneState.tokenStats.localZeroTokenActions += 1;
-              standaloneState.tokenStats.estimatedTokensSaved += 950;
               const isStrict = body.mode === 'strict_examiner';
               const title = body.nodeTitle || 'this proposition';
               const truth = body.unconditionalTruth || '';
-              const reply = isStrict
-                ? '[Strict Examiner Stress-Test]: Do not hide behind surface terminology for "' + title + '". State the exact causal mechanism: (1) What is the upstream premise? (2) What breaks immediately if that premise is violated? Reference anchor: ' + truth
-                : '[Socratic Coach (R2 Structural Hint)]: Pause and trace the causal arrow for "' + title + '". Which boundary condition or invariant governs this transition? Anchor: ' + truth;
+              const learnerText = body.learnerResponse || body.questionPrompt || '';
+              const openAIToken = getStoredOpenAIToken();
+
+              // 1. If OpenAI Account Token or API Key is stored in browser, route live through OpenAI!
+              if (openAIToken && openAIToken.length > 12) {
+                const sysPrompt = isStrict
+                  ? 'You are the LearnHarness Strict Examiner. Interrogate the student’s explanation of "' + title + '" against the ground truth ("' + truth + '"). Expose any vague hand-waving in 2-3 sharp sentences.'
+                  : 'You are the LearnHarness Socratic Coach. Give a minimal R2 structural hint for "' + title + '" (ground truth: "' + truth + '") without spoiling the full answer in 2-3 concise sentences.';
+
+                const oaRes = await originalFetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + openAIToken
+                  },
+                  body: JSON.stringify({
+                    model: 'gpt-4o-mini',
+                    messages: [
+                      { role: 'system', content: sysPrompt },
+                      { role: 'user', content: learnerText || ('Help me with ' + title) }
+                    ],
+                    max_tokens: 220,
+                    temperature: 0.3
+                  })
+                });
+                if (oaRes.ok) {
+                  const oaData = await oaRes.json();
+                  const replyText = oaData.choices && oaData.choices[0] && oaData.choices[0].message && oaData.choices[0].message.content;
+                  if (replyText) {
+                    standaloneState.tokenStats.aiAssistedActions += 1;
+                    return new Response(JSON.stringify({
+                      reply: replyText,
+                      message: replyText,
+                      providerUsed: 'OpenAI Account (gpt-4o-mini · Live)',
+                      cachedOrZeroToken: false
+                    }), {
+                      status: 200,
+                      headers: { 'Content-Type': 'application/json' }
+                    });
+                  }
+                }
+              }
+
+              // 2. Try local Mac bridge (http://127.0.0.1:5173/api/ai/tutor) if running
+              try {
+                const localRes = await originalFetch('http://127.0.0.1:5173/api/ai/tutor', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: init.body
+                });
+                if (localRes.ok) {
+                  return localRes;
+                }
+              } catch (e) {}
+
+              // 3. Fallback to 0-Token Pre-Compiled Socratic Doctrine Engine
+              standaloneState.tokenStats.localZeroTokenActions += 1;
+              standaloneState.tokenStats.estimatedTokensSaved += 950;
+              const fallbackReply = isStrict
+                ? '[Strict Examiner Stress-Test]: State the exact causal chain for "' + title + '" without relying on buzzwords. Specifically: what breaks immediately if the upstream premise is violated? Reference invariant: ' + truth
+                : '[Socratic Coach (Minimal Hint)]: Pause and trace the causal arrow for "' + title + '". Which boundary condition or invariant governs this transition? Reference anchor: ' + truth;
+
               return new Response(JSON.stringify({
-                reply,
+                reply: fallbackReply,
+                message: fallbackReply,
                 providerUsed: '0-Token Pre-Compiled Socratic Engine',
                 cachedOrZeroToken: true
               }), {
@@ -110,6 +165,7 @@ const standaloneHtml = `<!doctype html>
               });
             } catch (e) {}
           }
+
           return originalFetch(input, init);
         };
       })();
@@ -121,9 +177,3 @@ const standaloneHtml = `<!doctype html>
 const standaloneOutPath = path.join(rootDir, 'LearnHarness-Pro-Standalone.html');
 fs.writeFileSync(standaloneOutPath, standaloneHtml, 'utf8');
 console.log('Generated standalone HTML:', standaloneOutPath, '(' + Math.round(standaloneHtml.length / 1024) + ' KB)');
-
-const artifactOutPath = process.argv[2];
-if (artifactOutPath) {
-  fs.writeFileSync(artifactOutPath, standaloneHtml, 'utf8');
-  console.log('Generated artifact HTML:', artifactOutPath);
-}
