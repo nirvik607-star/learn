@@ -18,10 +18,9 @@ import type {
   PropositionNode,
   MasteryTier,
 } from '../types/harness';
-import {
-  computeRetrievability,
-  computeNodeReadiness,
-} from '../engine/learningEngine';
+import { ForceGraph } from './ForceGraph';
+import { gradeWithRubric, type AIGradeResult } from '../engine/aiClient';
+import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
 
 interface SocraticGraphViewProps {
   course: CoursePack;
@@ -32,6 +31,8 @@ interface SocraticGraphViewProps {
   onSelectUnit: (unitId: string | null) => void;
   onFastTrackNode: (nodeId: string, targetTier: MasteryTier) => void;
   onPracticeSingleNode: (nodeId: string) => void;
+  onFocusNode?: (nodeId: string) => void;
+  onConnectAI?: () => void;
 }
 
 type SubMode = 'graph_and_teach' | 'diagnostic_probe';
@@ -43,12 +44,6 @@ const TIER_LABELS: Record<MasteryTier, string> = {
   3: 'Mastered (Stage 3)',
 };
 
-const TIER_COLORS: Record<MasteryTier, string> = {
-  0: 'var(--tier-0)',
-  1: 'var(--tier-1)',
-  2: 'var(--tier-2)',
-  3: 'var(--tier-3)',
-};
 
 export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
   course,
@@ -59,7 +54,12 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
   onSelectUnit,
   onFastTrackNode,
   onPracticeSingleNode,
+  onFocusNode,
+  onConnectAI,
 }) => {
+  const aiConnected = useAIConnected();
+  const [probeGrade, setProbeGrade] = useState<AIGradeResult | null>(null);
+  const [probeGrading, setProbeGrading] = useState(false);
   const [subMode, setSubMode] = useState<SubMode>(initialSubMode);
   const [selectedNodeId, setSelectedNodeId] = useState<string>(
     initialNodeId || course.nodes[0]?.id || ''
@@ -109,6 +109,7 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
 
   const handleSelectNode = (nodeId: string) => {
     setSelectedNodeId(nodeId);
+    onFocusNode?.(nodeId);
     setSelectedPredictionIdx(null);
     setPredictionSubmitted(false);
     setSelectedCheckIdx(null);
@@ -314,6 +315,7 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
       ]);
     }
     setProbeDraft('');
+    setProbeGrade(null);
     setProbeIndex((i) => i + 1);
   };
 
@@ -486,6 +488,31 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
                   </div>
                 </div>
 
+                <div style={{ marginBottom: '14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {aiConnected ? (
+                    <button
+                      className="btn btn-sm"
+                      disabled={!probeDraft.trim() || probeGrading}
+                      onClick={async () => {
+                        setProbeGrading(true);
+                        setProbeGrade(await gradeWithRubric(currentProbeNode, currentProbeNode.predictionPrompt.question, probeDraft, 'probe'));
+                        setProbeGrading(false);
+                      }}
+                    >
+                      <Sparkles size={13} /> {probeGrading ? 'AI is placing you...' : 'Let AI judge floor vs edge'}
+                    </button>
+                  ) : (
+                    <AILock label="Connect AI to have it judge your floor and ceiling" onConnect={onConnectAI} />
+                  )}
+                  {probeGrading && <TypingDots />}
+                  {probeGrade && (
+                    <div className="ai-msg assistant">
+                      <span className="ai-chip">AI verdict: {probeGrade.score >= 70 ? 'floor held' : 'edge target'} · {probeGrade.score}/100</span>
+                      <div style={{ marginTop: 6 }}>{probeGrade.feedback}</div>
+                    </div>
+                  )}
+                </div>
+
                 <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                   <button
                     className="btn btn-primary"
@@ -572,96 +599,16 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
       ) : (
         /* INTERACTIVE PREREQUISITE GRAPH + PREDICT -> TEACH -> CHECK STUDIO */
         <div className="grid-12" style={{ alignItems: 'start' }}>
-          {/* Left Column: Prerequisite DAG Explorer */}
-          <div
-            className="card"
-            style={{
-              gridColumn: 'span 5',
-              padding: '18px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-            }}
-          >
-            <div>
-              <h3 style={{ fontSize: '0.95rem', fontWeight: 700 }}>
-                Prerequisite Proposition DAG
-              </h3>
-              <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                Click any proposition to inspect its causal premises and run <code>Predict → Teach → Check</code>.
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '680px', overflowY: 'auto', paddingRight: '4px' }}>
-              {filteredNodes.map((node) => {
-                const state = masteryMap[node.id];
-                const tier: MasteryTier = state?.tier || 0;
-                const breakdown = computeNodeReadiness(node, state);
-                const retrievability = state
-                  ? Math.round(computeRetrievability(state) * 100)
-                  : 100;
-                const isSelected = activeNode?.id === node.id;
-
-                return (
-                  <div
-                    key={node.id}
-                    onClick={() => handleSelectNode(node.id)}
-                    style={{
-                      padding: '12px 14px',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      background: isSelected ? 'var(--accent-subtle)' : 'var(--bg-elevated)',
-                      border: `1.5px solid ${
-                        isSelected ? 'var(--accent-primary)' : 'var(--border-subtle)'
-                      }`,
-                      transition: 'all 0.14s ease',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px', marginBottom: '6px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                        <span
-                          style={{
-                            width: '9px',
-                            height: '9px',
-                            borderRadius: '50%',
-                            background: TIER_COLORS[tier],
-                            display: 'inline-block',
-                          }}
-                        />
-                        <span style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
-                          {node.title}
-                        </span>
-                      </div>
-                      <span className="mono" style={{ fontSize: '0.76rem', fontWeight: 700, color: TIER_COLORS[tier] }}>
-                        {breakdown.effectiveReadiness}%
-                      </span>
-                    </div>
-
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-                      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                        <span className="badge" style={{ fontSize: '0.68rem', padding: '1px 6px' }}>
-                          {node.isUnconditionalTruth
-                            ? 'Principle (i): Premise'
-                            : 'Principle (ii): Derivation'}
-                        </span>
-                        {node.examWeight >= 4 && (
-                          <span className="badge badge-warning" style={{ fontSize: '0.68rem', padding: '1px 6px' }}>
-                            80/20 Core
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="mono" style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
-                        {node.prerequisites.length > 0
-                          ? `Requires ${node.prerequisites.length} node(s)`
-                          : 'Foundational Root'}{' '}
-                        {state?.lastReviewedAt ? `· Retr ${retrievability}%` : ''}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+          {/* Obsidian-style force-directed knowledge graph */}
+          <div className="card" style={{ gridColumn: 'span 12', padding: '12px' }}>
+            <ForceGraph
+              course={course}
+              masteryMap={masteryMap}
+              unitFilter={selectedUnitId}
+              selectedId={activeNode?.id || null}
+              onSelect={handleSelectNode}
+              height={480}
+            />
           </div>
 
           {/* Right Column: Active Node Predict -> Teach -> Check Inspector */}
@@ -669,7 +616,7 @@ export const SocraticGraphView: React.FC<SocraticGraphViewProps> = ({
             <div
               className="card"
               style={{
-                gridColumn: 'span 7',
+                gridColumn: 'span 12',
                 padding: '24px',
                 display: 'flex',
                 flexDirection: 'column',

@@ -37,8 +37,8 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     targetSelector: '[data-tour-id="tour-openai-auth"]',
     requiredTab: 'agent_setup',
     stepLabel: '3 / 4',
-    title: '3. Connect OpenAI (Optional)',
-    text: 'Paste an OpenAI key for live AI coaching, or study free in 0-Token instant mode.',
+    title: '3. Connect Grok, Claude, or OpenAI (Optional)',
+    text: 'Link SuperGrok (xAI), Claude Pro / Max, OpenAI Codex, or API keys for live AI coaching, or study free in 0-Token mode.',
   },
   {
     id: 'step-4-study',

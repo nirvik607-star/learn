@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import {
   Award,
   BookOpen,
@@ -67,7 +68,10 @@ export const ReadinessCommandCenter: React.FC<ReadinessCommandCenterProps> = ({
   return (
     <div>
       {/* Hero Exam Readiness Cockpit Console */}
-      <section
+      <motion.section
+        initial={{ opacity: 0, y: -14, scale: 0.99 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: 'spring', stiffness: 340, damping: 28 }}
         className="surface-card readiness-hero"
         id="readiness-hero-card"
         data-tour-id="tour-readiness-hero"
@@ -142,19 +146,25 @@ export const ReadinessCommandCenter: React.FC<ReadinessCommandCenterProps> = ({
 
           {/* Quizlet Learn 4-Stage Mastery Bar */}
           <div className="segmented-bar" aria-label="Quizlet Learn Mastery Progression">
-            <div
+            <motion.div
               className="segment-mastered"
-              style={{ width: `${masteredPct}%` }}
+              initial={{ width: 0 }}
+              animate={{ width: `${masteredPct}%` }}
+              transition={{ type: 'spring', stiffness: 220, damping: 22 }}
               title={`Mastered (Stage 3 Exam Application): ${report.tierCounts.mastered}`}
             />
-            <div
+            <motion.div
               className="segment-learned"
-              style={{ width: `${learnedPct}%` }}
+              initial={{ width: 0 }}
+              animate={{ width: `${learnedPct}%` }}
+              transition={{ type: 'spring', stiffness: 220, damping: 22 }}
               title={`Learned (Stage 2 Cued Recall): ${report.tierCounts.learned}`}
             />
-            <div
+            <motion.div
               className="segment-familiar"
-              style={{ width: `${familiarPct}%` }}
+              initial={{ width: 0 }}
+              animate={{ width: `${familiarPct}%` }}
+              transition={{ type: 'spring', stiffness: 220, damping: 22 }}
               title={`Familiar (Stage 1 Recognition & Discrimination): ${report.tierCounts.familiar}`}
             />
             <div className="segment-unseen" style={{ flex: 1 }} />
@@ -314,7 +324,7 @@ export const ReadinessCommandCenter: React.FC<ReadinessCommandCenterProps> = ({
             <Play size={14} strokeWidth={2} /> Launch Optimized Sprint
           </button>
         </div>
-      </section>
+      </motion.section>
 
       {/* Secondary Quick-Action Strip */}
       <div
@@ -380,7 +390,7 @@ export const ReadinessCommandCenter: React.FC<ReadinessCommandCenterProps> = ({
 
       {/* Unit Readiness Cards Grid (Max 2-Box Nesting: Card -> 1px Hairline Telemetry Rows) */}
       <div className="units-grid" data-tour-id="tour-unit-grid">
-        {report.units.map((unitReport) => {
+        {report.units.map((unitReport, unitIdx) => {
           const unitMeta = course.units.find((u) => u.id === unitReport.unitId)!;
           const unitNodes = course.nodes.filter((n) => n.unitId === unitReport.unitId);
 
@@ -390,8 +400,11 @@ export const ReadinessCommandCenter: React.FC<ReadinessCommandCenterProps> = ({
           const uFamiliar = (unitReport.tierCounts.familiar / uTotal) * 100;
 
           return (
-            <article
+            <motion.article
               key={unitReport.unitId}
+              initial={{ opacity: 0, y: 18 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: unitIdx * 0.07, type: 'spring', stiffness: 320, damping: 26 }}
               className="surface-card"
               style={{
                 display: 'flex',
@@ -648,7 +661,7 @@ export const ReadinessCommandCenter: React.FC<ReadinessCommandCenterProps> = ({
                   <Award size={14} strokeWidth={1.75} /> Graph
                 </button>
               </div>
-            </article>
+            </motion.article>
           );
         })}
       </div>

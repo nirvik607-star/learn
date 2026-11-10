@@ -20,6 +20,15 @@ import {
   maskKey,
 } from '../core/auth-keys';
 import { compileNotesToCoursePackLocally } from '../engine/courseCompiler';
+import {
+  compileCourseWithAI,
+  refineCourseWithAI,
+  testAIConnection,
+  getActiveAIProvider,
+  notifyAIStatusChanged,
+  type AITestResult,
+} from '../engine/aiClient';
+import { useAIConnected, AILock, TypingDots } from './AITutorPanel';
 
 // Borrowed directly from amosblomqvist/learnharness components/settings/chatgpt-connection.tsx & subscription-connections.tsx
 export const CHATGPT_NOTICE =
@@ -131,6 +140,7 @@ interface CourseCompilerAndAuthModalProps {
   onLoadOptionalSampleCourse: () => void;
   onClearAllCoursesAndReset: () => void;
   onOpenSpotlightTutorial: () => void;
+  onDeleteCourse?: (courseId: string) => void;
 }
 
 function buildCompactAgentPrompt(courseCode: string, examName: string): string {
@@ -222,7 +232,9 @@ export const CourseCompilerAndAuthModal: React.FC<
   onLoadOptionalSampleCourse,
   onClearAllCoursesAndReset,
   onOpenSpotlightTutorial,
+  onDeleteCourse,
 }) => {
+  const activeAI = getActiveAIProvider();
   const [courseCode, setCourseCode] = useState('');
   const [examName, setExamName] = useState('');
   const [copiedPrompt, setCopiedPrompt] = useState(false);
@@ -232,6 +244,11 @@ export const CourseCompilerAndAuthModal: React.FC<
     ok: boolean;
     text: string;
   } | null>(null);
+  const aiConnected = useAIConnected();
+  const [compilingAI, setCompilingAI] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<AITestResult | null>(null);
+  const [refiningCourseId, setRefiningCourseId] = useState<string | null>(null);
 
   // LearnHarness Providers state (borrowed from keys-section.tsx & chatgpt-connection.tsx)
   const [localKeys, setLocalKeys] = useState<Record<string, string>>(() => {
@@ -376,6 +393,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     } catch {
       // ignore
     }
+    notifyAIStatusChanged();
 
     if (serverBaseUrl !== null) {
       try {
@@ -411,6 +429,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     } catch {
       // ignore
     }
+    notifyAIStatusChanged();
     if (serverBaseUrl !== null) {
       try {
         await fetch(`${serverBaseUrl}/api/keys/${encodeURIComponent(envVar)}`, {
@@ -750,6 +769,7 @@ export const CourseCompilerAndAuthModal: React.FC<
     } catch {
       // ignore
     }
+    notifyAIStatusChanged();
 
     setNativeStatuses((prev) =>
       prev.map((s) =>
@@ -961,55 +981,117 @@ export const CourseCompilerAndAuthModal: React.FC<
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
+  const handleTestAIConnection = async () => {
+    setAiTesting(true);
+    setAiTestResult(null);
+    try {
+      const res = await testAIConnection();
+      setAiTestResult(res);
+    } catch (err: unknown) {
+      setAiTestResult({
+        ok: false,
+        provider: activeAI?.name || 'Unknown',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setAiTesting(false);
+    }
+  };
+
+  const handleRefineCourseWithAI = async (targetCourse: CoursePack) => {
+    setRefiningCourseId(targetCourse.id);
+    setCompileNotice({ ok: true, text: `Refining "${targetCourse.title}" into clean 80/20 knowledge graph with ${activeAI?.name || 'AI'}...` });
+    try {
+      const refined = await refineCourseWithAI(targetCourse);
+      onAddCompiledCourse(refined);
+      setCompileNotice({
+        ok: true,
+        text: `✨ Refined "${refined.title}" into ${refined.units.length} Units & ${refined.nodes.length} high-yield concepts!`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setCompileNotice({
+        ok: false,
+        text: `❌ Refinement failed: ${msg}`,
+      });
+    } finally {
+      setRefiningCourseId(null);
+    }
+  };
+
+  const handleCompileDirectlyWithAI = async () => {
+    const trimmed = importOrNotesInput.trim();
+    if (!trimmed) {
+      setCompileNotice({ ok: false, text: 'Paste lecture notes or outline first.' });
+      return;
+    }
+    setCompilingAI(true);
+    setCompileNotice({ ok: true, text: `Synthesizing 80/20 knowledge graph with ${activeAI?.name || 'AI'}...` });
+    try {
+      const compiled = await compileCourseWithAI(
+        trimmed,
+        courseCode.trim() || 'COURSE 101',
+        examName.trim() || 'Upcoming Exam'
+      );
+      if (compiled && Array.isArray(compiled.nodes) && compiled.nodes.length > 0) {
+        onAddCompiledCourse(compiled);
+        setImportOrNotesInput('');
+        setCompileNotice({
+          ok: true,
+          text: `✅ AI synthesized "${compiled.title}" with ${compiled.units.length} Units, ${compiled.nodes.length} Concepts, and 4 Quizlet stages.`,
+        });
+      } else {
+        setCompileNotice({
+          ok: false,
+          text: 'AI response did not contain valid concepts. Try testing connection or building locally.',
+        });
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setCompileNotice({
+        ok: false,
+        text: `❌ AI Compilation Failed: ${msg}. You can test connection above or build locally with the 0-Token engine.`,
+      });
+    } finally {
+      setCompilingAI(false);
+    }
+  };
+
   const handleBuildOrImportCourse = (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = importOrNotesInput.trim();
     if (!trimmed) {
       setCompileNotice({
         ok: false,
-        text: 'Paste your agent output or class notes first.',
+        text: 'Paste your notes or JSON first.',
       });
       return;
     }
 
-    const jsonMatch =
-      trimmed.startsWith('{')
-        ? trimmed
-        : trimmed.match(/```(?:json)?\s*(\{[\s\S]*\})\s*```/)?.[1] || null;
-
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch) as CoursePack;
-        if (parsed && Array.isArray(parsed.nodes) && parsed.nodes.length > 0) {
-          onImportCourseJson(parsed);
-          setImportOrNotesInput('');
-          setCompileNotice({
-            ok: true,
-            text: `Loaded "${parsed.title}" (${parsed.nodes.length} concepts).`,
-          });
-          return;
-        }
-      } catch {
-        setCompileNotice({
-          ok: false,
-          text: 'Invalid JSON. Copy the complete JSON block from your agent.',
-        });
-        return;
+    try {
+      const compiled = compileNotesToCoursePackLocally({
+        title: courseCode.trim() || 'My Study Set',
+        code: courseCode.trim() || 'COURSE 101',
+        examTitle: examName.trim() || 'Exam',
+        rawText: trimmed,
+      });
+      if (trimmed.startsWith('{')) {
+        onImportCourseJson(compiled);
+      } else {
+        onAddCompiledCourse(compiled);
       }
+      setImportOrNotesInput('');
+      setCompileNotice({
+        ok: true,
+        text: `Created "${compiled.title}" (${compiled.units.length} Units, ${compiled.nodes.length} concepts).`,
+      });
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setCompileNotice({
+        ok: false,
+        text: `Build failed: ${msg}`,
+      });
     }
-
-    const compiled = compileNotesToCoursePackLocally({
-      title: courseCode.trim() || 'My Study Set',
-      code: courseCode.trim() || 'COURSE 101',
-      examTitle: examName.trim() || 'Exam',
-      rawText: trimmed,
-    });
-    onAddCompiledCourse(compiled);
-    setImportOrNotesInput('');
-    setCompileNotice({
-      ok: true,
-      text: `Created "${compiled.title}" (${compiled.nodes.length} concepts).`,
-    });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1170,12 +1252,78 @@ export const CourseCompilerAndAuthModal: React.FC<
               Paste Agent Output or Notes
             </h3>
 
+            {/* Live AI Connection Status & Test Bar */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '7px 10px',
+                background: 'var(--bg-elevated)',
+                borderRadius: '6px',
+                border: '1px solid var(--border-subtle)',
+                marginBottom: '8px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 }}>
+                <div
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: activeAI ? 'var(--success)' : 'var(--text-muted)',
+                    flexShrink: 0,
+                  }}
+                />
+                <span
+                  style={{
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {activeAI ? `${activeAI.name} Active` : 'No AI Key Connected (0-Token Mode)'}
+                </span>
+              </div>
+              {activeAI && (
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  disabled={aiTesting}
+                  onClick={handleTestAIConnection}
+                  style={{ fontSize: '0.7rem', padding: '3px 8px', flexShrink: 0 }}
+                >
+                  {aiTesting ? 'Testing...' : 'Test Connection'}
+                </button>
+              )}
+            </div>
+
+            {aiTestResult && (
+              <div
+                style={{
+                  padding: '6px 10px',
+                  borderRadius: '4px',
+                  fontSize: '0.75rem',
+                  marginBottom: '8px',
+                  background: aiTestResult.ok ? 'rgba(74, 222, 128, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                  border: `1px solid ${aiTestResult.ok ? 'var(--success)' : 'var(--danger)'}`,
+                  color: aiTestResult.ok ? 'var(--success)' : 'var(--danger)',
+                }}
+              >
+                {aiTestResult.ok
+                  ? `🟢 ${aiTestResult.provider} connected (${aiTestResult.latencyMs}ms) · Model: ${aiTestResult.model}`
+                  : `🔴 Connection Error: ${aiTestResult.error}`}
+              </div>
+            )}
+
             <textarea
               className="textarea mono"
               rows={5}
               value={importOrNotesInput}
               onChange={(e) => setImportOrNotesInput(e.target.value)}
-              placeholder={`Paste Agent JSON or raw notes:\n# Unit 1\nTerm: Definition...`}
+              placeholder={`Paste Agent JSON or raw notes:\n# Unit 1: Problem Discovery\n- Bottleneck Inversion: High-leverage AI starts at constraints...`}
               style={{ fontSize: '0.78rem' }}
             />
 
@@ -1193,8 +1341,21 @@ export const CourseCompilerAndAuthModal: React.FC<
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <button type="submit" className="btn btn-primary">
-              <Sparkles size={14} /> Build Study Set
+            {aiConnected ? (
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={compilingAI}
+                onClick={handleCompileDirectlyWithAI}
+              >
+                <Sparkles size={14} /> {compilingAI ? 'Synthesizing 80/20 Knowledge Graph...' : `Compile Directly with ${activeAI?.name || 'Connected AI'}`}
+              </button>
+            ) : (
+              <AILock label="Connect AI to compile notes directly in-app" />
+            )}
+            {compilingAI && <div style={{ alignSelf: 'center' }}><TypingDots /></div>}
+            <button type="submit" className="btn btn-sm">
+              Build Locally (0-Token) or Load JSON
             </button>
             <div style={{ display: 'flex', gap: '6px' }}>
               <button
@@ -1225,6 +1386,62 @@ export const CourseCompilerAndAuthModal: React.FC<
                 </button>
               )}
             </div>
+
+            {allCourses.length > 0 && (
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div className="mono" style={{ fontSize: '0.68rem', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                  Loaded Study Sets ({allCourses.length})
+                </div>
+                {allCourses.map((c) => (
+                  <div
+                    key={c.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '6px 10px',
+                      borderRadius: '5px',
+                      background: 'var(--bg-elevated)',
+                      border: '1px solid var(--border-subtle)',
+                      fontSize: '0.78rem',
+                      gap: '8px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0 }}>
+                      <span style={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {c.title}
+                      </span>
+                      <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                        {c.code} · {c.units.length} Units · {c.nodes.length} Concepts
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
+                      {aiConnected && (
+                        <button
+                          type="button"
+                          className="btn btn-sm"
+                          disabled={refiningCourseId === c.id}
+                          onClick={() => handleRefineCourseWithAI(c)}
+                          title={`Refine and distill "${c.title}" into a clean 80/20 graph with AI`}
+                          style={{ padding: '2px 7px', fontSize: '0.68rem', color: 'var(--accent)' }}
+                        >
+                          <Sparkles size={11} /> {refiningCourseId === c.id ? 'Refining...' : 'Refine with AI'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn btn-sm"
+                        onClick={() => onDeleteCourse?.(c.id)}
+                        title={`Delete study set "${c.title}"`}
+                        style={{ padding: '2px 7px', fontSize: '0.68rem', color: 'var(--danger)' }}
+                      >
+                        <Trash2 size={11} /> Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </form>
 

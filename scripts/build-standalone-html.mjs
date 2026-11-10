@@ -67,13 +67,87 @@ const standaloneHtml = `<!doctype html>
           }
         }
 
+        function getStoredKey(k) {
+          try {
+            return (window.localStorage.getItem(k) || '').trim();
+          } catch (e) {
+            return '';
+          }
+        }
+
         window.fetch = async function(input, init) {
           const url = typeof input === 'string' ? input : (input && input.url) || '';
 
+          // 1. Intercept /api/subscriptions on static GitHub Pages
+          if (url.includes('/api/subscriptions')) {
+            const openAITok = getStoredOpenAIToken();
+            const xaiKey = getStoredKey('lh_xai_key') || getStoredKey('lh_xai_account_token');
+            const anthropicKey = getStoredKey('lh_anthropic_key') || getStoredKey('lh_anthropic_account_token');
+            const copilotTok = getStoredKey('lh_copilot_token');
+
+            if (init && init.method === 'POST' && init.body) {
+              try {
+                const req = JSON.parse(init.body);
+                if (req.op === 'disconnect') {
+                  if (req.providerId === 'chatgpt') window.localStorage.removeItem('lh_openai_account_token');
+                  if (req.providerId === 'xai') { window.localStorage.removeItem('lh_xai_key'); window.localStorage.removeItem('lh_xai_account_token'); }
+                  if (req.providerId === 'anthropic') { window.localStorage.removeItem('lh_anthropic_key'); window.localStorage.removeItem('lh_anthropic_account_token'); }
+                }
+              } catch (e) {}
+            }
+
+            const nativeList = [
+              {
+                providerId: 'xai',
+                available: true,
+                connected: xaiKey.length > 5,
+                pending: false,
+                allowBackgroundUse: true,
+                connectionId: xaiKey.length > 5 ? 'xai-connected' : null
+              },
+              {
+                providerId: 'anthropic',
+                available: true,
+                connected: anthropicKey.length > 5,
+                pending: false,
+                allowBackgroundUse: true,
+                connectionId: anthropicKey.length > 5 ? 'anthropic-connected' : null
+              },
+              {
+                providerId: 'github-copilot',
+                available: true,
+                connected: copilotTok.length > 5,
+                pending: false,
+                allowBackgroundUse: true,
+                connectionId: copilotTok.length > 5 ? 'copilot-connected' : null
+              }
+            ];
+
+            const chatgptObj = {
+              available: true,
+              pending: false,
+              allowBackgroundUse: true,
+              activeId: openAITok.length > 5 ? 'chatgpt-account' : null,
+              accounts: openAITok.length > 5 ? [{ id: 'chatgpt-account', label: 'ChatGPT / Codex User', plan: 'Pro/Team' }] : [],
+              error: null
+            };
+
+            return new Response(JSON.stringify({
+              chatgpt: chatgptObj,
+              native: nativeList,
+              value: nativeList
+            }), {
+              status: 200,
+              headers: { 'Content-Type': 'application/json' }
+            });
+          }
+
           if (url.endsWith('/api/ai/status')) {
             const tok = getStoredOpenAIToken();
+            const xKey = getStoredKey('lh_xai_key');
             standaloneState.openaiKeyConfigured = tok.length > 12;
             standaloneState.chatgptOAuthConnected = tok.length > 12;
+            standaloneState.activeProvider = xKey ? 'xai' : (tok ? 'chatgpt-oauth' : 'local-engine');
             return new Response(JSON.stringify(standaloneState), {
               status: 200,
               headers: { 'Content-Type': 'application/json' }
@@ -87,6 +161,39 @@ const standaloneHtml = `<!doctype html>
             });
           }
 
+          if (url.includes('/api/ai/chat') && init && init.body) {
+            const xaiKey = getStoredKey('lh_xai_key') || getStoredKey('lh_xai_account_token');
+            if (xaiKey && xaiKey.length > 5) {
+              try {
+                const parsedBody = JSON.parse(init.body);
+                parsedBody.model = parsedBody.model || 'grok-beta';
+                const xRes = await originalFetch('https://api.x.ai/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + xaiKey },
+                  body: JSON.stringify(parsedBody),
+                });
+                if (xRes.ok) {
+                  const data = await xRes.json();
+                  const reply = data.choices?.[0]?.message?.content;
+                  if (reply) {
+                    return new Response(JSON.stringify({ ok: true, reply }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                  }
+                }
+              } catch (e) {}
+            }
+            const tok = getStoredOpenAIToken();
+            if (tok && tok.length > 12) {
+              try {
+                return await originalFetch('https://api.openai.com/v1/chat/completions', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok },
+                  body: init.body,
+                });
+              } catch (e) {}
+            }
+            return new Response(JSON.stringify({ ok: false, error: 'No AI key' }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+          }
+
           if (url.includes('/api/ai/tutor') && init && init.body) {
             try {
               const body = JSON.parse(init.body);
@@ -95,8 +202,47 @@ const standaloneHtml = `<!doctype html>
               const truth = body.unconditionalTruth || '';
               const learnerText = body.learnerResponse || body.questionPrompt || '';
               const openAIToken = getStoredOpenAIToken();
+              const xaiKey = getStoredKey('lh_xai_key') || getStoredKey('lh_xai_account_token');
+              const anthropicKey = getStoredKey('lh_anthropic_key') || getStoredKey('lh_anthropic_account_token');
 
-              // 1. If OpenAI Account Token or API Key is stored in browser, route live through OpenAI!
+              // 1. Direct Grok (xAI) if configured
+              if (xaiKey && xaiKey.length > 8) {
+                try {
+                  const xRes = await originalFetch('https://api.x.ai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      'Authorization': 'Bearer ' + xaiKey
+                    },
+                    body: JSON.stringify({
+                      model: 'grok-2-latest',
+                      messages: [
+                        { role: 'system', content: isStrict
+                            ? 'You are the LearnHarness Strict Examiner for "' + title + '" (truth: ' + truth + '). Challenge vague answers.'
+                            : 'You are the LearnHarness Socratic Tutor for "' + title + '" (truth: ' + truth + '). Give a minimal R2 hint.' },
+                        { role: 'user', content: learnerText || ('Tutor me on ' + title) }
+                      ],
+                      max_tokens: 220,
+                      temperature: 0.3
+                    })
+                  });
+                  if (xRes.ok) {
+                    const xData = await xRes.json();
+                    const reply = xData.choices?.[0]?.message?.content;
+                    if (reply) {
+                      standaloneState.tokenStats.aiAssistedActions += 1;
+                      return new Response(JSON.stringify({
+                        reply: reply,
+                        message: reply,
+                        providerUsed: 'Grok (grok-2-latest · Live xAI)',
+                        cachedOrZeroToken: false
+                      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                    }
+                  }
+                } catch (e) {}
+              }
+
+              // 2. Direct OpenAI Account / Key if configured
               if (openAIToken && openAIToken.length > 12) {
                 const sysPrompt = isStrict
                   ? 'You are the LearnHarness Strict Examiner. Interrogate the student’s explanation of "' + title + '" against the ground truth ("' + truth + '"). Expose any vague hand-waving in 2-3 sharp sentences.'
@@ -136,7 +282,7 @@ const standaloneHtml = `<!doctype html>
                 }
               }
 
-              // 2. Try local Mac bridge (http://127.0.0.1:5173/api/ai/tutor) if running
+              // 3. Try local Mac bridge (http://127.0.0.1:5173/api/ai/tutor) if running
               try {
                 const localRes = await originalFetch('http://127.0.0.1:5173/api/ai/tutor', {
                   method: 'POST',
@@ -148,7 +294,7 @@ const standaloneHtml = `<!doctype html>
                 }
               } catch (e) {}
 
-              // 3. Fallback to 0-Token Pre-Compiled Socratic Doctrine Engine
+              // 4. Fallback to 0-Token Pre-Compiled Socratic Doctrine Engine
               standaloneState.tokenStats.localZeroTokenActions += 1;
               standaloneState.tokenStats.estimatedTokensSaved += 950;
               const fallbackReply = isStrict
