@@ -417,8 +417,8 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
           >
             <Award size={32} />
           </div>
-          <h2 className="font-serif-editorial" style={{ fontSize: '2rem', fontWeight: 400 }}>
-            Sprint Complete — Exam Readiness Now {report.overallScore}%!
+          <h2 style={{ fontSize: '1.75rem', fontWeight: 600, letterSpacing: '-0.03em' }}>
+            Sprint Complete — Exam Readiness Now {report.overallScore}%
           </h2>
           <p style={{ color: 'var(--text-secondary)', maxWidth: '540px', margin: '0.4rem auto 1.25rem' }}>
             {delta > 0
@@ -886,10 +886,19 @@ export const QuizletLearnSprint: React.FC<QuizletLearnSprintProps> = ({
                 </button>
               )}
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.84rem' }}>
+            <div className="telemetry-list" style={{ fontSize: '0.84rem' }}>
               {activeHints.slice(0, hintRung + 1).map((h, i) => (
-                <div key={i} style={{ color: i === hintRung ? 'var(--text-primary)' : 'var(--text-secondary)' }}>
-                  • {h}
+                <div
+                  key={i}
+                  className="telemetry-row"
+                  style={{
+                    justifyContent: 'flex-start',
+                    gap: '0.6rem',
+                    color: i === hintRung ? 'var(--text-primary)' : 'var(--text-secondary)',
+                  }}
+                >
+                  <span className="badge badge-familiar font-mono-tabular">R{i}</span>
+                  <span>{h.replace(/^R\d:\s*/i, '')}</span>
                 </div>
               ))}
             </div>

@@ -22,14 +22,15 @@ const rawJsContent = fs.readFileSync(path.join(assetsDir, jsFile), 'utf8');
 const safeJsContent = rawJsContent.replace(/<\/script>/gi, '<\\/script>');
 
 const standaloneHtml = `<!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-type="software">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="page-type" content="software" />
     <title>LearnHarness Pro — Cognitive Exam Mastery & Socratic Knowledge Graph</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>${cssContent}</style>
   </head>
   <body>
